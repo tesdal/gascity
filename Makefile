@@ -20,7 +20,7 @@ LDFLAGS := -X main.version=$(VERSION) \
            -X main.commit=$(COMMIT) \
            -X main.date=$(BUILD_TIME)
 
-.PHONY: build check check-all check-bd check-docker check-docs check-dolt lint fmt-check fmt vet test test-cmd-gc-process test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-mcp-mail test-docker test-k8s test-cover cover install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev
+.PHONY: build check check-all check-bd check-docker check-docs check-dolt lint fmt-check fmt vet test test-cmd-gc-process test-acceptance test-acceptance-b test-acceptance-c test-acceptance-all test-tutorial-goldens test-tutorial-regression test-tutorial test-integration test-integration-shards test-integration-shards-cover test-integration-packages test-integration-packages-cover test-integration-review-formulas test-integration-review-formulas-cover test-integration-review-formulas-basic test-integration-review-formulas-basic-cover test-integration-review-formulas-retries test-integration-review-formulas-retries-cover test-integration-review-formulas-recovery test-integration-review-formulas-recovery-cover test-integration-bdstore test-integration-bdstore-cover test-integration-rest test-integration-rest-cover test-integration-rest-smoke test-integration-rest-smoke-cover test-integration-rest-full test-integration-rest-full-cover test-mcp-mail test-docker test-k8s test-cover cover install install-tools install-buildx setup clean generate check-schema docker-base docker-agent docker-controller docs-dev dashboard-build dashboard-dev dashboard-check dashboard-smoke dashboard-ci spec-ci
 
 ## build: compile gc binary with version metadata
 build:
@@ -326,14 +326,36 @@ dashboard-build:
 dashboard-dev:
 	cd cmd/gc/dashboard/web && npm run dev
 
-## dashboard-check: typecheck + build the SPA, then go test the static handler
+## dashboard-check: typecheck, test, and build the SPA, then go test the static handler
 dashboard-check: dashboard-build
 	cd cmd/gc/dashboard/web && npm run typecheck
+	cd cmd/gc/dashboard/web && npm test
 	go test ./cmd/gc/dashboard/...
+
+## dashboard-smoke: run the built SPA with Vite preview and fetch its assets
+dashboard-smoke: dashboard-build
+	@set -eu; \
+	cd cmd/gc/dashboard/web; \
+	port=$$(node -e "const net=require('net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{console.log(s.address().port); s.close();});"); \
+	log=$$(mktemp); \
+	npm run preview -- --host 127.0.0.1 --port "$$port" --strictPort >"$$log" 2>&1 & \
+	pid=$$!; \
+	cleanup() { kill "$$pid" >/dev/null 2>&1 || true; wait "$$pid" >/dev/null 2>&1 || true; rm -f "$$log"; }; \
+	trap cleanup EXIT INT TERM; \
+	ready=0; \
+	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50; do \
+		if curl -fsS "http://127.0.0.1:$$port/" >/dev/null 2>&1; then ready=1; break; fi; \
+		if ! kill -0 "$$pid" >/dev/null 2>&1; then cat "$$log" >&2; exit 1; fi; \
+		sleep 0.1; \
+	done; \
+	if [ "$$ready" -ne 1 ]; then cat "$$log" >&2; echo "ERROR: dashboard preview did not start on port $$port" >&2; exit 1; fi; \
+	curl -fsS "http://127.0.0.1:$$port/dashboard.js" >/dev/null; \
+	curl -fsS "http://127.0.0.1:$$port/dashboard.css" >/dev/null; \
+	echo "Dashboard preview smoke passed"
 
 ## dashboard-ci: rebuild the SPA bundle and fail if the tracked dist/ is stale.
 ## Used by CI to enforce that cmd/gc/dashboard/web/dist/ matches the source.
-dashboard-ci: dashboard-check
+dashboard-ci: dashboard-check dashboard-smoke
 	@if ! git diff --quiet -- cmd/gc/dashboard/web/dist; then \
 		echo "ERROR: cmd/gc/dashboard/web/dist/ is stale — run 'make dashboard-build' and commit." >&2; \
 		git --no-pager diff --stat -- cmd/gc/dashboard/web/dist; \

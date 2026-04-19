@@ -52,14 +52,10 @@ func (s *Server) humaHandleEventList(ctx context.Context, input *EventListInput)
 
 	index := s.latestIndex()
 
-	// Pagination support. Apply the same ceiling used across other list
-	// endpoints so `limit=1_000_000` can't force a million-item serialization.
+	// Pagination support.
 	limit := 100
 	if input.Limit > 0 {
 		limit = input.Limit
-	}
-	if limit > maxPaginationLimit {
-		limit = maxPaginationLimit
 	}
 	if input.Cursor != "" {
 		pp := pageParams{
@@ -76,15 +72,12 @@ func (s *Server) humaHandleEventList(ctx context.Context, input *EventListInput)
 		}, nil
 	}
 
-	// Capture the full match count BEFORE truncating so clients can tell
-	// how many items match vs. fit the page.
-	total := len(wires)
 	if limit < len(wires) {
 		wires = wires[:limit]
 	}
 	return &ListOutput[WireEvent]{
 		Index: index,
-		Body:  ListBody[WireEvent]{Items: wires, Total: total},
+		Body:  ListBody[WireEvent]{Items: wires, Total: len(wires)},
 	}, nil
 }
 

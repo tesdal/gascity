@@ -1,11 +1,5 @@
 package api
 
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-)
-
 // Per-domain Huma input/output types for the beads handler
 // group. Split out of the original huma_types.go; mirrors the layout
 // of huma_handlers_beads.go.
@@ -53,13 +47,15 @@ type BeadCreateInput struct {
 	CityScope
 	IdempotencyKey string `header:"Idempotency-Key" required:"false" doc:"Idempotency key for safe retries."`
 	Body           struct {
-		Rig         string   `json:"rig,omitempty" doc:"Rig name."`
-		Title       string   `json:"title" doc:"Bead title." minLength:"1"`
-		Type        string   `json:"type,omitempty" doc:"Bead type."`
-		Priority    *int     `json:"priority,omitempty" doc:"Bead priority."`
-		Assignee    string   `json:"assignee,omitempty" doc:"Assigned agent."`
-		Description string   `json:"description,omitempty" doc:"Bead description."`
-		Labels      []string `json:"labels,omitempty" doc:"Bead labels."`
+		Rig         string            `json:"rig,omitempty" doc:"Rig name."`
+		Title       string            `json:"title" doc:"Bead title." minLength:"1"`
+		Type        string            `json:"type,omitempty" doc:"Bead type."`
+		Priority    *int              `json:"priority,omitempty" doc:"Bead priority."`
+		Parent      string            `json:"parent,omitempty" doc:"Parent bead ID."`
+		Assignee    string            `json:"assignee,omitempty" doc:"Assigned agent."`
+		Description string            `json:"description,omitempty" doc:"Bead description."`
+		Labels      []string          `json:"labels,omitempty" doc:"Bead labels."`
+		Metadata    map[string]string `json:"metadata,omitempty" doc:"Metadata key-value pairs to set."`
 	}
 }
 
@@ -88,35 +84,12 @@ type beadUpdateBody struct {
 	Status       *string           `json:"status,omitempty" doc:"Bead status."`
 	Type         *string           `json:"type,omitempty" doc:"Bead type."`
 	Priority     *int              `json:"priority,omitempty" doc:"Bead priority."`
+	Parent       *string           `json:"parent,omitempty" doc:"Parent bead ID. Empty string clears the parent."`
 	Assignee     *string           `json:"assignee,omitempty" doc:"Assigned agent."`
 	Description  *string           `json:"description,omitempty" doc:"Bead description."`
 	Labels       []string          `json:"labels,omitempty" doc:"Bead labels."`
 	RemoveLabels []string          `json:"remove_labels,omitempty" doc:"Labels to remove."`
 	Metadata     map[string]string `json:"metadata,omitempty" doc:"Metadata key-value pairs to set."`
-}
-
-// UnmarshalJSON rejects `"priority": null` explicitly. Standard Go JSON decoding
-// folds null and absent into a nil pointer, which silently drops clear-intent
-// requests. Clients that want to clear priority must use a dedicated endpoint
-// (not yet available); until then, null is a 400.
-func (b *beadUpdateBody) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	if p, ok := raw["priority"]; ok {
-		trimmed := bytes.TrimSpace(p)
-		if bytes.Equal(trimmed, []byte("null")) {
-			return fmt.Errorf("clearing priority via null is not supported; omit the field to leave it unchanged")
-		}
-	}
-	type alias beadUpdateBody
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	*b = beadUpdateBody(a)
-	return nil
 }
 
 // BeadAssignInput is the Huma input for POST /v0/city/{cityName}/bead/{id}/assign.

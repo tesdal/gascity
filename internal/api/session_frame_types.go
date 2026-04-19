@@ -23,46 +23,18 @@ import (
 // design.
 
 // SessionRawMessageFrame is the wire type for one provider-native
-// transcript frame. The Go level carries the original JSON bytes plus
-// an optional pre-decoded Value for callers that already have the
-// decoded form in hand. When Raw is non-nil we emit it verbatim —
-// preserving byte-identity, map-key order, and int64 precision above
-// 2^53 which would otherwise be lost via a float64 round-trip.
-//
-// At the OpenAPI level the schema is intentionally unconstrained
-// ("any JSON value"), because the provider owns the frame shape.
+// transcript frame. The Go level carries an arbitrary JSON value
+// and marshals verbatim. At the OpenAPI level the schema is
+// intentionally unconstrained ("any JSON value").
 type SessionRawMessageFrame struct {
-	// Raw is the original JSON bytes, emitted verbatim on marshal.
-	// Populated by the raw-path session stream handlers so tool-call
-	// IDs, high-precision timestamps, and whitespace-sensitive fields
-	// survive the round-trip.
-	Raw json.RawMessage
-	// Value is an optional pre-decoded frame. Used when the caller
-	// only has the decoded Go form; marshals via json.Marshal(Value).
-	// If Raw is non-empty it wins.
+	// Value is the provider-native frame. Marshaled verbatim; the schema
+	// is declared via Schema(r).
 	Value any
-}
-
-// wrapRawFrameBytes wraps each provider-native frame's raw JSON bytes
-// in a SessionRawMessageFrame so the wire shape is byte-identical to
-// what the provider wrote. Prefer this over wrapRawFrames when the
-// caller has entry.Raw available.
-func wrapRawFrameBytes(values []json.RawMessage) []SessionRawMessageFrame {
-	out := make([]SessionRawMessageFrame, len(values))
-	for i, v := range values {
-		out[i] = SessionRawMessageFrame{Raw: append(json.RawMessage(nil), v...)}
-	}
-	return out
 }
 
 // wrapRawFrames wraps each provider-native frame value in a
 // SessionRawMessageFrame so the wire shape is preserved while the Go
 // slice type carries the documented schema.
-//
-// Deprecated: prefer wrapRawFrameBytes — passing decoded `any` values
-// forces a float64 round-trip that loses int64 precision above 2^53
-// and does not preserve map-key order. Kept for callers (closed-snapshot
-// paths) that have already decoded the frame.
 func wrapRawFrames(values []any) []SessionRawMessageFrame {
 	out := make([]SessionRawMessageFrame, len(values))
 	for i, v := range values {
@@ -71,23 +43,23 @@ func wrapRawFrames(values []any) []SessionRawMessageFrame {
 	return out
 }
 
-// MarshalJSON emits Raw verbatim if set; otherwise json.Marshal(Value).
-// Emits `null` when both are empty.
+// MarshalJSON emits the underlying Value so the wire shape matches what
+// the provider wrote to its session log.
 func (f SessionRawMessageFrame) MarshalJSON() ([]byte, error) {
-	if len(f.Raw) > 0 {
-		return f.Raw, nil
-	}
 	if f.Value == nil {
 		return []byte("null"), nil
 	}
 	return json.Marshal(f.Value)
 }
 
-// UnmarshalJSON stashes the raw JSON into Raw so round-tripping
-// through this type never alters byte-identity or precision.
+// UnmarshalJSON stashes the raw JSON into Value so round-tripping
+// through this type does not alter any fields.
 func (f *SessionRawMessageFrame) UnmarshalJSON(data []byte) error {
-	f.Raw = append(json.RawMessage(nil), data...)
-	f.Value = nil
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	f.Value = v
 	return nil
 }
 

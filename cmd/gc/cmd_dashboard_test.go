@@ -84,13 +84,7 @@ func TestRunDashboardServeAllowsNoCityWithAPIOverride(t *testing.T) {
 	}
 }
 
-// TestRunDashboardServeUsesStandaloneControllerAPI pins the post-fixup
-// behavior: the standalone controller's API now serves supervisor-shaped
-// /v0/city/{cityName}/... routes via api.NewSupervisorMux, so `gc
-// dashboard` targets it directly instead of hard-erroring. The previous
-// revision ("TestRunDashboardServeRejectsStandaloneCityAPIOutsideCityDir")
-// asserted the rejection that this fixup intentionally removed.
-func TestRunDashboardServeUsesStandaloneControllerAPI(t *testing.T) {
+func TestRunDashboardServeRejectsStandaloneCityAPIOutsideCityDir(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 
 	cityDir := filepath.Join(t.TempDir(), "alpha")
@@ -126,23 +120,19 @@ port = 9123
 	rigFlag = ""
 
 	calledServe := false
-	var gotAPIURL string
-	dashboardServeHook = func(_ int, apiURL string) error {
+	dashboardServeHook = func(_ int, _ string) error {
 		calledServe = true
-		gotAPIURL = apiURL
 		return nil
 	}
 
 	err := runDashboardServe("gc dashboard", 9090, "", io.Discard)
-	if err != nil {
-		t.Fatalf("runDashboardServe() error = %v, want nil (standalone-controller API is supported)", err)
+	if err == nil {
+		t.Fatal("runDashboardServe() error = nil, want supervisor-only failure")
 	}
-	if !calledServe {
-		t.Fatal("dashboardServeHook was not called; expected it to target the standalone controller API")
+	if !strings.Contains(err.Error(), "requires the supervisor API") {
+		t.Fatalf("runDashboardServe() error = %q, want supervisor-only failure", err)
 	}
-	// Standalone controller URL should match the city.toml api.port + a
-	// loopback host derived from cfg.API.BindOrDefault().
-	if !strings.Contains(gotAPIURL, ":9123") {
-		t.Fatalf("standalone API URL = %q, want it to include the configured port :9123", gotAPIURL)
+	if calledServe {
+		t.Fatal("dashboardServeHook was called for unsupported standalone city API")
 	}
 }

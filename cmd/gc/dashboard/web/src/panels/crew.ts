@@ -300,15 +300,6 @@ function closeLogDrawer(): void {
   }
 }
 
-// closeLogDrawerExternal is called by main.ts when the dashboard leaves
-// city scope, so the transcript stream + its `pushPause()` token get
-// torn down along with every other city-scoped panel. Without this, a
-// drawer open at scope-change time would keep its session stream alive
-// and leave `pauseCount > 0` forever (blocking all refreshes).
-export function closeLogDrawerExternal(): void {
-  closeLogDrawer();
-}
-
 async function loadTranscript(sessionID: string, prepend: boolean): Promise<void> {
   const city = cityScope();
   const messagesEl = byId("log-drawer-messages");

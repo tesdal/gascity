@@ -66,7 +66,7 @@ work_query = "printf 'pwd=%s|agent=%s|template=%s|session=%s|origin=%s' \"$PWD\"
 	if !strings.Contains(out, "origin=named") {
 		t.Fatalf("stdout = %q, want GC_SESSION_ORIGIN to remain named", out)
 	}
-	if !strings.Contains(out, fmt.Sprintf("pwd=%s", cityDir)) {
+	if !strings.Contains(out, fmt.Sprintf("pwd=%s", canonicalTestPath(cityDir))) {
 		t.Fatalf("stdout = %q, want hook to run from city root", out)
 	}
 }

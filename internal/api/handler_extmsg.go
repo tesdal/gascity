@@ -45,14 +45,14 @@ func (s *Server) extmsgEmitEvent() func(string, string, events.Payload) {
 // members via the session message API. This ensures delivery regardless of
 // session state: sleeping sessions are woken, idle sessions get a new prompt
 // turn that triggers the transcript check hook.
-func (s *Server) extmsgNotifyMembers(ctx context.Context, conv extmsg.ConversationRef, inboundMsg extmsg.ExternalInboundMessage) {
+func (s *Server) extmsgNotifyMembers(conv extmsg.ConversationRef, inboundMsg extmsg.ExternalInboundMessage) {
 	svc := s.state.ExtMsgServices()
 	store := s.state.CityBeadStore()
 	if svc == nil || store == nil {
 		return
 	}
 	caller := extmsg.Caller{Kind: extmsg.CallerController, ID: "extmsg-notify"}
-	members, err := svc.Transcript.ListMemberships(ctx, caller, conv)
+	members, err := svc.Transcript.ListMemberships(context.Background(), caller, conv)
 	if err != nil {
 		log.Printf("extmsg: ListMemberships failed for %s/%s: %v", conv.Provider, conv.ConversationID, err)
 		return
@@ -63,6 +63,7 @@ func (s *Server) extmsgNotifyMembers(ctx context.Context, conv extmsg.Conversati
 		actorKind = "human"
 	}
 
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	for _, m := range members {
 		wg.Add(1)

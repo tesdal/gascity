@@ -276,21 +276,17 @@ func (s *Server) emitClosedSessionSnapshotRaw(send sse.Sender, info session.Info
 		return
 	}
 
-	rawMessageBytes := sess.RawPayloadBytes()
-	if len(rawMessageBytes) == 0 {
+	rawMessages := sess.RawPayloads()
+	if len(rawMessages) == 0 {
 		return
 	}
 
-	// Closed-session snapshot: emit raw bytes end-to-end so int64
-	// tool-call IDs and nanosecond timestamps are byte-faithful to what
-	// the provider wrote. The streaming path (streamSessionTranscriptLogRaw)
-	// already uses wrapRawFrameBytes; the snapshot path now matches.
 	if err := send(sse.Message{ID: 1, Data: SessionStreamRawMessageEvent{
 		ID:       info.ID,
 		Template: info.Template,
 		Provider: info.Provider,
 		Format:   "raw",
-		Messages: wrapRawFrameBytes(rawMessageBytes),
+		Messages: wrapRawFrames(rawMessages),
 	}}); err != nil {
 		return
 	}
@@ -332,39 +328,32 @@ func (s *Server) streamSessionTranscriptLogRaw(ctx context.Context, send sse.Sen
 		// Compute activity early (used after message emission).
 		activity := sessionlog.InferActivityFromEntries(sess.Messages)
 
-		// Keep raw bytes end-to-end. Previously we Unmarshaled entry.Raw
-		// into `any` and remarshaled in wrapRawFrames — that round-trip
-		// loses int64 precision above 2^53 (tool-call IDs, nanosecond
-		// timestamps) and does not preserve map-key order. Provider-native
-		// frames must ship byte-faithful; we use json.RawMessage so the
-		// wire output matches what the provider wrote verbatim.
-		rawBytes := make([]json.RawMessage, 0, len(sess.Messages))
+		rawMessages := make([]any, 0, len(sess.Messages))
 		uuids := make([]string, 0, len(sess.Messages))
 		for _, entry := range sess.Messages {
 			if len(entry.Raw) == 0 {
 				continue
 			}
-			// Validate that the bytes are well-formed JSON; skip malformed
-			// frames the same way the previous Unmarshal branch did.
-			if !json.Valid(entry.Raw) {
+			var v any
+			if err := json.Unmarshal(entry.Raw, &v); err != nil {
 				continue
 			}
-			rawBytes = append(rawBytes, entry.Raw)
+			rawMessages = append(rawMessages, v)
 			uuids = append(uuids, entry.UUID)
 		}
 
 		// Emit messages if there are new ones.
-		if len(rawBytes) > 0 {
-			var toSend []json.RawMessage
+		if len(rawMessages) > 0 {
+			var toSend []any
 
 			if lastSentUUID == "" {
 				// First emission: send everything.
-				toSend = rawBytes
+				toSend = rawMessages
 			} else {
 				found := false
 				for i, uuid := range uuids {
 					if uuid == lastSentUUID {
-						toSend = rawBytes[i+1:]
+						toSend = rawMessages[i+1:]
 						found = true
 						break
 					}
@@ -377,7 +366,7 @@ func (s *Server) streamSessionTranscriptLogRaw(ctx context.Context, send sse.Sen
 					log.Printf("session stream raw: cursor %s lost, emitting only new messages", lastSentUUID)
 					for i, uuid := range uuids {
 						if _, seen := sentUUIDs[uuid]; !seen {
-							toSend = append(toSend, rawBytes[i])
+							toSend = append(toSend, rawMessages[i])
 						}
 					}
 				}
@@ -390,7 +379,7 @@ func (s *Server) streamSessionTranscriptLogRaw(ctx context.Context, send sse.Sen
 					Template: info.Template,
 					Provider: info.Provider,
 					Format:   "raw",
-					Messages: wrapRawFrameBytes(toSend),
+					Messages: wrapRawFrames(toSend),
 				}})
 			}
 

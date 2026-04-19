@@ -92,12 +92,6 @@ func (s *Server) humaHandleFormulaRuns(_ context.Context, input *FormulaRunsInpu
 // variables at their defaults. Callers that need to supply variable
 // values use humaHandleFormulaPreview (POST /preview) so the variable
 // dictionary is a spec-visible typed body.
-//
-// Deprecation note: older clients used `GET ?var.<name>=<value>` query
-// params to supply variable values. Those values are now ignored. We detect
-// legacy callers by scanning the raw request URL via the FormulaDetailInput
-// resolver and return 400 with a migration hint, rather than silently
-// returning a default-substituted preview the caller thinks is customized.
 func (s *Server) humaHandleFormulaDetail(ctx context.Context, input *FormulaDetailInput) (*struct {
 	Body formulaDetailResponse
 }, error,

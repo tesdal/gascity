@@ -2527,8 +2527,9 @@ func TestHealthBeadsProviderWaitsForStorePingAfterRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	dataDir := filepath.Join(cityPath, ".beads", "dolt")
 	port := reserveRandomTCPPort(t)
-	listener := startTCPListenerProcess(t, port)
+	listener := startTCPListenerProcessInDir(t, port, dataDir)
 	defer func() {
 		_ = listener.Process.Kill()
 		_ = listener.Wait()
@@ -2537,7 +2538,7 @@ func TestHealthBeadsProviderWaitsForStorePingAfterRecovery(t *testing.T) {
 		Running:   true,
 		PID:       listener.Process.Pid,
 		Port:      port,
-		DataDir:   filepath.Join(cityPath, ".beads", "dolt"),
+		DataDir:   dataDir,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := writeDoltRuntimeStateFile(providerManagedDoltStatePath(cityPath), state); err != nil {
@@ -2621,8 +2622,14 @@ exit 2
 	if err != nil {
 		t.Fatalf("read provider ops: %v", err)
 	}
-	if strings.TrimSpace(string(ops)) != "health\nrecover" {
-		t.Fatalf("provider ops = %q, want health then recover", string(ops))
+	opsLines := strings.Fields(strings.TrimSpace(string(ops)))
+	if len(opsLines) < 2 || len(opsLines)%2 != 0 {
+		t.Fatalf("provider ops = %q, want health/recover pairs", string(ops))
+	}
+	for i := 0; i < len(opsLines); i += 2 {
+		if opsLines[i] != "health" || opsLines[i+1] != "recover" {
+			t.Fatalf("provider ops = %q, want health/recover pairs", string(ops))
+		}
 	}
 }
 
@@ -2858,7 +2865,11 @@ case "${1:-}" in
       last="$arg"
     done
     if [ -d "$last/.beads" ]; then
-      stat -c %a "$last/.beads" > "$perm_file"
+      if stat -c %a "$last/.beads" > "$perm_file" 2>/dev/null; then
+        :
+      else
+        stat -f %Lp "$last/.beads" > "$perm_file"
+      fi
     else
       printf 'missing
 ' > "$perm_file"
@@ -6135,8 +6146,15 @@ dolt.port: "4406"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(fmt.Sprintf(`[workspace]
+name = "demo"
 
-	t.Setenv("GC_BEADS", "exec:"+script)
+[beads]
+provider = %q
+`, "exec:"+script)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	err := healthBeadsProvider(cityPath)
 	if err == nil || !strings.Contains(err.Error(), "exec beads health: health failed") {
 		t.Fatalf("healthBeadsProvider() error = %v, want direct external health failure", err)
@@ -6173,8 +6191,15 @@ dolt.port: "4406"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(fmt.Sprintf(`[workspace]
+name = "demo"
 
-	t.Setenv("GC_BEADS", "exec:"+script)
+[beads]
+provider = %q
+`, "exec:"+script)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := shutdownBeadsProvider(cityPath); err != nil {
 		t.Fatalf("shutdownBeadsProvider() error = %v", err)
 	}

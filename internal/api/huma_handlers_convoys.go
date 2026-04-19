@@ -461,7 +461,7 @@ func (s *Server) humaHandleConvoyDelete(_ context.Context, input *ConvoyDeleteIn
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		resp := &OKResponse{}
-		resp.Body.Status = "closed"
+		resp.Body.Status = "deleted"
 		return resp, nil
 	}
 	return nil, huma.Error404NotFound("convoy " + id + " not found")

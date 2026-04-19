@@ -8,8 +8,15 @@ import (
 )
 
 func TestAliveTreatsZombieAsDead(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("zombie detection uses /proc on linux")
+	switch runtime.GOOS {
+	case "linux", "darwin":
+	default:
+		t.Skip("zombie detection is only covered on Linux and macOS")
+	}
+	if runtime.GOOS == "darwin" {
+		if _, err := exec.LookPath("ps"); err != nil {
+			t.Skip("ps not installed")
+		}
 	}
 
 	cmd := exec.Command("sh", "-c", "exit 0")

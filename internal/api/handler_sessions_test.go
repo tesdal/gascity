@@ -221,9 +221,13 @@ func TestHandleSessionListPagination(t *testing.T) {
 		t.Errorf("limit-only: got next_cursor %q, want empty (no cursor mode)", resp.NextCursor)
 	}
 
-	// Cursor mode: first page.
+	// Cursor mode: first page via encoded offset cursor. Huma's native
+	// query parsing treats ?cursor= (empty) identically to an absent
+	// parameter, so clients bootstrap into cursor mode with a real
+	// encoded offset — encodeCursor(0) gets the first page.
+	page0 := encodeCursor(0)
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest("GET", cityURL(fs, "/sessions?cursor=&limit=2"), nil)
+	r = httptest.NewRequest("GET", cityURL(fs, "/sessions?cursor=")+page0+"&limit=2", nil)
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("page1: status %d", w.Code)

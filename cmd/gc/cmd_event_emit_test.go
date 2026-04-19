@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -156,18 +157,43 @@ func TestDoEventEmitPayloadInvalidJSON(t *testing.T) {
 }
 
 func TestEventEmitViaCLI(t *testing.T) {
-	// The original PR rewrote `gc events` to read exclusively from the
-	// supervisor/controller API (no more local events.jsonl fallback).
-	// This test bootstraps a city with no live controller and no
-	// supervisor, so the readback via `gc events` has no source to query
-	// and correctly errors with "could not auto-discover the supervisor
-	// API". The test's premise (emit-then-read via CLI) conflicts with
-	// the API-first contract in the PR's commit messages.
-	//
-	// The event emission path is still covered by the unit test above;
-	// this CLI-end-to-end test is skipped until the suite gets a way to
-	// launch a fake controller for the duration of the test.
-	t.Skip("gc events is API-only; this test needs a fake controller to exercise readback end-to-end")
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_DOLT", "skip")
+	t.Setenv("GC_SESSION", "fake")
+	configureIsolatedRuntimeEnv(t)
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"init", dir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("gc init = %d; stderr: %s", code, stderr.String())
+	}
+
+	// Use --city flag in args (run() creates fresh cobra root, resetting cityFlag).
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"--city", dir, "event", "emit", "bead.created", "--subject", "gc-1", "--message", "Build Hanoi"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("gc event emit = %d; stderr: %s", code, stderr.String())
+	}
+
+	evts, err := events.ReadAll(filepath.Join(dir, ".gc", "events.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(evts))
+	}
+	got := evts[0]
+	if got.Type != "bead.created" {
+		t.Errorf("Type = %q, want bead.created", got.Type)
+	}
+	if got.Subject != "gc-1" {
+		t.Errorf("Subject = %q, want gc-1", got.Subject)
+	}
+	if got.Message != "Build Hanoi" {
+		t.Errorf("Message = %q, want Build Hanoi", got.Message)
+	}
 }
 
 func TestEventMissingSubcommand(t *testing.T) {

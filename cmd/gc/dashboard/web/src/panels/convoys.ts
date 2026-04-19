@@ -1,4 +1,4 @@
-import { api, cityScope } from "../api";
+import { api, apiErrorMessage, cityScope, mutationHeaders } from "../api";
 import { byId, clear, el } from "../util/dom";
 import { calculateActivity, statusBadgeClass } from "../util/legacy";
 import { popPause, pushPause, showToast } from "../ui";
@@ -298,11 +298,11 @@ async function createConvoy(): Promise<void> {
     return;
   }
   const res = await api.POST("/v0/city/{cityName}/convoys", {
-    params: { path: { cityName: city } },
+    params: { path: { cityName: city }, header: mutationHeaders },
     body: { title, items },
   });
   if (res.error) {
-    showToast("error", "Create failed", res.error.detail ?? "Could not create convoy");
+    showToast("error", "Create failed", apiErrorMessage(res.error, "Could not create convoy"));
     return;
   }
   showToast("success", "Convoy created", title);
@@ -317,11 +317,11 @@ async function addIssueToConvoy(): Promise<void> {
   const item = input?.value.trim() ?? "";
   if (!item) return;
   const res = await api.POST("/v0/city/{cityName}/convoy/{id}/add", {
-    params: { path: { cityName: city, id: currentConvoyID } },
+    params: { path: { cityName: city, id: currentConvoyID }, header: mutationHeaders },
     body: { items: [item] },
   });
   if (res.error) {
-    showToast("error", "Add failed", res.error.detail ?? "Could not add issue");
+    showToast("error", "Add failed", apiErrorMessage(res.error, "Could not add issue"));
     return;
   }
   if (input) input.value = "";

@@ -45,7 +45,7 @@ func (f *fakeCityResolver) CityState(name string) State {
 func newTestSupervisorMux(t *testing.T, cities map[string]*fakeState) *SupervisorMux {
 	t.Helper()
 	resolver := &fakeCityResolver{cities: cities}
-	return NewSupervisorMux(resolver, false, "test", time.Now())
+	return NewSupervisorMux(resolver, nil, false, "test", time.Now())
 }
 
 func TestSupervisorCitiesList(t *testing.T) {

@@ -42,6 +42,9 @@ const (
 	ControllerStopped  = "controller.stopped"
 	CitySuspended      = "city.suspended"
 	CityResumed        = "city.resumed"
+	CityCreated        = "city.created"
+	CityReady          = "city.ready"
+	CityInitFailed     = "city.init_failed"
 	OrderFired         = "order.fired"
 	OrderCompleted     = "order.completed"
 	OrderFailed        = "order.failed"
@@ -71,6 +74,7 @@ var KnownEventTypes = []string{
 	ConvoyCreated, ConvoyClosed,
 	ControllerStarted, ControllerStopped,
 	CitySuspended, CityResumed,
+	CityCreated, CityReady, CityInitFailed,
 	OrderFired, OrderCompleted, OrderFailed,
 	ProviderSwapped,
 	ExtMsgBound, ExtMsgUnbound, ExtMsgGroupCreated,

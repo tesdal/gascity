@@ -690,7 +690,7 @@ func runController(
 		if readOnly {
 			fmt.Fprintf(stderr, "api: binding to %s — mutation endpoints disabled (non-localhost)\n", bind) //nolint:errcheck
 		}
-		apiMux := api.NewSupervisorMux(&singleCityStateResolver{state: cs}, readOnly, "controller", time.Now())
+		apiMux := api.NewSupervisorMux(&singleCityStateResolver{state: cs}, NewInitializer(), readOnly, "controller", time.Now())
 		addr := net.JoinHostPort(bind, strconv.Itoa(cfg.API.Port))
 		apiLis, apiErr := net.Listen("tcp", addr)
 		if apiErr != nil {

@@ -42,6 +42,43 @@ The spec is the full reference. A brief summary of the surfaces:
 - **Config & packs.** Per-city config and pack metadata under
   `/v0/city/{cityName}/config` and `/v0/city/{cityName}/packs`.
 
+## Request and response headers
+
+Every operation's header contract appears in the OpenAPI spec — if a
+request header is required or a response header is promised, the
+spec describes it. The two cross-cutting headers every API client
+should know about:
+
+- **`X-GC-Request`** (request header, required on all mutations).
+  Anti-CSRF token required on every POST, PUT, PATCH, and DELETE.
+  Any non-empty value is accepted; the header's presence is what
+  the server checks. Requests without it are rejected with
+  `403 csrf: X-GC-Request header required on mutation endpoints`.
+  Leveraging the same-origin policy, a cross-origin attacker
+  cannot set this header on a forged request. The generated Go
+  and TypeScript clients set this header automatically; only raw
+  HTTP clients need to remember it.
+- **`X-GC-Request-Id`** (response header, every response).
+  Opaque per-response identifier the server assigns for log
+  correlation. Every response — success or error — carries this
+  header; the spec declares it via a `$ref` to
+  `components.headers.X-GC-Request-Id`. Include its value in bug
+  reports so the server's logs can be traced.
+
+SSE stream operations emit additional runtime-status headers before
+the first event frame:
+
+- **`stream-agent-output` / `stream-agent-output-qualified`**:
+  `GC-Agent-Status` — set to `stopped` when the agent is not
+  running and the stream is replaying transcript from the session
+  log instead of live output.
+- **`stream-session`**: `GC-Session-State` (e.g. `active`,
+  `closed`) and `GC-Session-Status` (`stopped` when the session's
+  underlying process is not running).
+
+Each header's schema is documented in the operation's
+`responses.200.headers` in the spec.
+
 ## Errors
 
 Every error response is an RFC 9457 Problem Details body

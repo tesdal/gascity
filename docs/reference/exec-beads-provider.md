@@ -296,9 +296,10 @@ Stdout: the root bead ID as plain text (e.g., `WP-42\n`).
 
 ### Status Mapping
 
-Gas City uses 3 statuses: `open`, `in_progress`, `closed`. The exec
-script must normalize its backend's statuses to these three. For example,
-`bd` maps `blocked`, `review`, and `testing` to `open`.
+Gas City preserves backend status values at the API boundary. Providers
+should emit the native status string they support, such as bd's `open`,
+`in_progress`, `blocked`, `review`, `testing`, and `closed`. An empty
+status is treated as `open`.
 
 ## Implementation Plan
 

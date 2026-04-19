@@ -12,18 +12,10 @@ import (
 // Matches the JSON shape of ListBody[mail.Message] so the wire is
 // unchanged; the dedicated Go type gives the spec a mail-specific schema
 // name.
-//
-// Partial/PartialErrors signal that the aggregation swept over multiple
-// rig providers and at least one of them failed. Callers then know the
-// list is not authoritative without needing to re-issue the request. This
-// mirrors ListBody's semantics so the all-rigs sweep fails open (partial
-// list + errors) rather than fails closed (503 for any single provider).
 type MailListBody struct {
-	Items         []mail.Message `json:"items" doc:"The list of messages."`
-	Total         int            `json:"total" doc:"Total number of messages matching the query."`
-	NextCursor    string         `json:"next_cursor,omitempty" doc:"Cursor for the next page of results."`
-	Partial       bool           `json:"partial,omitempty" doc:"True when one or more rig providers failed and the list is not authoritative."`
-	PartialErrors []string       `json:"partial_errors,omitempty" doc:"Per-provider errors when partial is true."`
+	Items      []mail.Message `json:"items" doc:"The list of messages."`
+	Total      int            `json:"total" doc:"Total number of messages matching the query."`
+	NextCursor string         `json:"next_cursor,omitempty" doc:"Cursor for the next page of results."`
 }
 
 // MailListOutput is the response envelope for mail list and thread endpoints.
@@ -119,15 +111,9 @@ type MailCountInput struct {
 }
 
 // MailCountOutput is the response body for GET /v0/mail/count.
-// Partial/PartialErrors mirror MailListBody: when one rig provider
-// fails but others succeed, we return the partial counts and flag
-// the shortfall rather than returning 500 and losing the count
-// entirely.
 type MailCountOutput struct {
 	Body struct {
-		Total         int      `json:"total" doc:"Total message count."`
-		Unread        int      `json:"unread" doc:"Unread message count."`
-		Partial       bool     `json:"partial,omitempty" doc:"True when one or more rig providers failed and the counts are not authoritative."`
-		PartialErrors []string `json:"partial_errors,omitempty" doc:"Per-provider errors when partial is true."`
+		Total  int `json:"total" doc:"Total message count."`
+		Unread int `json:"unread" doc:"Unread message count."`
 	}
 }

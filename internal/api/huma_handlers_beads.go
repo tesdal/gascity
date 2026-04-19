@@ -306,9 +306,11 @@ func (s *Server) humaHandleBeadCreate(ctx context.Context, input *BeadCreateInpu
 		Title:       input.Body.Title,
 		Type:        input.Body.Type,
 		Priority:    input.Body.Priority,
+		ParentID:    input.Body.Parent,
 		Assignee:    assignee,
 		Description: input.Body.Description,
 		Labels:      input.Body.Labels,
+		Metadata:    input.Body.Metadata,
 	})
 	if err != nil {
 		s.idem.unreserve(idemKey)
@@ -379,13 +381,9 @@ func (s *Server) humaHandleBeadAssign(ctx context.Context, input *BeadAssignInpu
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		// Once Get succeeded in this store, treat Update-ErrNotFound as a
-		// concurrent-delete race rather than "try the next store" — the bead
-		// was just there; iterating would silently apply to a different store
-		// that happens to share the ID prefix.
 		if err := store.Update(id, beads.UpdateOpts{Assignee: &assignee}); err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
-				return nil, huma.Error409Conflict("conflict: bead " + id + " was deleted concurrently")
+				continue
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -403,11 +401,11 @@ func (s *Server) humaHandleBeadAssign(ctx context.Context, input *BeadAssignInpu
 //
 // Note on null vs absent: standard Go JSON decoding folds `field: null` and
 // "field absent" together — both produce a nil pointer, treated as "no
-// change." To keep "clear priority" from silently becoming "no change,"
-// beadUpdateBody has a custom UnmarshalJSON that inspects the raw tokens
-// and rejects `priority: null` with a 4xx + migration hint. See
-// huma_types_beads.go. Clients that want to clear priority must use a
-// dedicated endpoint (not yet exposed); sending null is a hard error.
+// change." Earlier revisions used a json.RawMessage body to peek at field
+// tokens and reject `priority: null` with a 400 ("clearing priority is not
+// supported"). That UX nicety was removed in Phase 3 because (a) the only
+// in-repo caller (dashboard issue update) never sends null, and (b) keeping
+// it required a json.RawMessage body that broke the spec-driven contract.
 func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInput) (*OKResponse, error) {
 	id := input.ID
 	body := input.Body
@@ -417,6 +415,7 @@ func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInpu
 		Status:       body.Status,
 		Type:         body.Type,
 		Priority:     body.Priority,
+		ParentID:     body.Parent,
 		Description:  body.Description,
 		Labels:       body.Labels,
 		RemoveLabels: body.RemoveLabels,
@@ -436,13 +435,9 @@ func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInpu
 			}
 			opts.Assignee = &assignee
 		}
-		// Once Get succeeded in this store, treat Update-ErrNotFound as a
-		// concurrent-delete race (409) rather than iterating to the next
-		// store — otherwise a delete racing with update silently applies
-		// the mutation to a different store that happens to share the ID.
 		if err := store.Update(id, opts); err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
-				return nil, huma.Error409Conflict("conflict: bead " + id + " was deleted concurrently")
+				continue
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -460,9 +455,6 @@ func (s *Server) humaHandleBeadUpdate(ctx context.Context, input *BeadUpdateInpu
 }
 
 // humaHandleBeadDelete is the Huma-typed handler for DELETE /v0/bead/{id}.
-// It is implemented as a soft-delete (store.Close) — see the `"closed"`
-// status field for honest wire-contract semantics. Hard-delete is not
-// exposed through the API.
 func (s *Server) humaHandleBeadDelete(_ context.Context, input *BeadDeleteInput) (*OKResponse, error) {
 	id := input.ID
 	for _, store := range s.beadStoresForID(id) {
@@ -473,7 +465,7 @@ func (s *Server) humaHandleBeadDelete(_ context.Context, input *BeadDeleteInput)
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		resp := &OKResponse{}
-		resp.Body.Status = "closed"
+		resp.Body.Status = "deleted"
 		return resp, nil
 	}
 	return nil, huma.Error404NotFound("bead " + id + " not found")

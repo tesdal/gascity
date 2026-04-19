@@ -7,14 +7,7 @@ import (
 	"testing"
 )
 
-// TestResolveEventsScopeUsesStandaloneControllerAPI pins the post-fixup
-// behavior: the standalone controller's API serves supervisor-shaped
-// /v0/city/{cityName}/events routes via api.NewSupervisorMux, so
-// `gc events` resolves to the local controller API instead of
-// hard-erroring. The previous revision
-// ("TestResolveEventsScopeRejectsStandaloneCityAPIOutsideCityDir")
-// asserted the rejection that this fixup intentionally removed.
-func TestResolveEventsScopeUsesStandaloneControllerAPI(t *testing.T) {
+func TestResolveEventsScopeRejectsStandaloneCityAPIOutsideCityDir(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 
 	cityDir := filepath.Join(t.TempDir(), "alpha")
@@ -47,14 +40,11 @@ port = 9123
 	cityFlag = cityDir
 	rigFlag = ""
 
-	scope, err := resolveEventsScope("")
-	if err != nil {
-		t.Fatalf("resolveEventsScope() error = %v, want nil (standalone-controller API is supported)", err)
+	_, err := resolveEventsScope("")
+	if err == nil {
+		t.Fatal("resolveEventsScope() error = nil, want supervisor-only failure")
 	}
-	if !strings.Contains(scope.apiURL, ":9123") {
-		t.Fatalf("standalone events scope apiURL = %q, want configured port :9123", scope.apiURL)
-	}
-	if scope.cityName != "alpha" {
-		t.Fatalf("standalone events scope cityName = %q, want %q", scope.cityName, "alpha")
+	if !strings.Contains(err.Error(), "requires the supervisor API") {
+		t.Fatalf("resolveEventsScope() error = %q, want supervisor-only failure", err)
 	}
 }

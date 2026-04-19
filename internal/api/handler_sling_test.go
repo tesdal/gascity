@@ -87,12 +87,8 @@ func TestSlingMissingTarget(t *testing.T) {
 	body := `{"bead":"abc"}`
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, newPostRequest(cityURL(state, "/sling"), strings.NewReader(body)))
-	// target is now marked required:true + minLength:1 in the spec, so
-	// Huma rejects at the validator (422 Unprocessable Entity) before
-	// the handler's explicit "target is required" 400 can fire. Either
-	// status communicates "missing required field" unambiguously.
-	if rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 400 or 422 for missing target", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 
@@ -195,12 +191,6 @@ func TestSlingPoolTarget(t *testing.T) {
 }
 
 func TestSlingConflictReturns409ForExistingLiveWorkflow(t *testing.T) {
-	// Upstream-added test that expects the pre-Huma handleSling handler
-	// behavior. The Huma migration moved sling to /v0/city/{cityName}/sling
-	// and changed how FormulaV2 feature-flag state reaches the handler.
-	// This test needs reworking for the new Huma wiring; skipped for now
-	// as an upstream-only regression, separate from the migration.
-	t.Skip("upstream-added test; needs rework for Huma migration sling routing")
 	srv, state := newSlingTestServer(t)
 	state.cfg.Daemon.FormulaV2 = true
 	formulaDir := t.TempDir()

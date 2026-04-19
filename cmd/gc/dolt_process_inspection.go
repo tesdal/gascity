@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,9 +251,26 @@ func extractFlagValue(args, flag string) string {
 func processCWDMatches(pid int, dataDir string) bool {
 	cwd, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "cwd"))
 	if err != nil {
-		return false
+		return processCWDMatchesViaLsof(pid, dataDir)
 	}
 	return samePath(cwd, dataDir)
+}
+
+func processCWDMatchesViaLsof(pid int, dataDir string) bool {
+	out, ok := lsofOutput("-a", "-p", strconv.Itoa(pid), "-d", "cwd")
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 9 || fields[3] != "cwd" {
+			continue
+		}
+		if samePath(strings.Join(fields[8:], " "), dataDir) {
+			return true
+		}
+	}
+	return false
 }
 
 func benignManagedDeletedInodeTarget(target string) bool {
@@ -287,25 +305,101 @@ func processHasDeletedDataInodes(pid int, dataDir string) bool {
 		return false
 	}
 	if _, err := exec.LookPath("lsof"); err == nil {
-		out, lsofErr := exec.Command("lsof", "-p", strconv.Itoa(pid)).Output()
-		if lsofErr == nil {
-			cleanDataDir := filepath.Clean(dataDir)
-			for _, line := range strings.Split(string(out), "\n") {
-				if !strings.Contains(line, " (deleted)") || !strings.Contains(line, cleanDataDir) {
-					continue
-				}
-				idx := strings.Index(line, cleanDataDir)
-				if idx >= 0 {
-					target := strings.TrimSpace(strings.TrimSuffix(line[idx:], " (deleted)"))
-					if benignManagedDeletedInodeTarget(target) {
-						continue
-					}
-				}
-				return true
-			}
+		if lsofReportsDeletedDataInodes(pid, dataDir) {
+			return true
 		}
 	}
 	return false
+}
+
+func lsofReportsDeletedDataInodes(pid int, dataDir string) bool {
+	cleanDataDir := filepath.Clean(dataDir)
+	if out, ok := lsofOutput("-p", strconv.Itoa(pid)); ok {
+		if lsofDeletedSuffixReportsDataInodes(out, cleanDataDir) {
+			return true
+		}
+	}
+	if out, ok := lsofOutput("-a", "-p", strconv.Itoa(pid), "+L1"); ok {
+		if lsofZeroLinkReportsDataInodes(out, cleanDataDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func lsofOutput(args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", args...).Output()
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func lsofDeletedSuffixReportsDataInodes(out, cleanDataDir string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, " (deleted)") {
+			continue
+		}
+		idx := strings.Index(line, "/")
+		if idx < 0 {
+			continue
+		}
+		target := strings.TrimSpace(strings.TrimSuffix(line[idx:], " (deleted)"))
+		if !pathWithinPossiblyDeletedDir(target, cleanDataDir) {
+			continue
+		}
+		if benignManagedDeletedInodeTarget(target) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func lsofZeroLinkReportsDataInodes(out, cleanDataDir string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		if fields[7] != "0" {
+			continue
+		}
+		target := strings.Join(fields[9:], " ")
+		if !pathWithinPossiblyDeletedDir(target, cleanDataDir) {
+			continue
+		}
+		if benignManagedDeletedInodeTarget(target) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func samePossiblyDeletedPath(a, b string) bool {
+	return normalizePossiblyDeletedPath(a) == normalizePossiblyDeletedPath(b)
+}
+
+func pathWithinPossiblyDeletedDir(target, dir string) bool {
+	normalizedTarget := normalizePossiblyDeletedPath(target)
+	normalizedDir := normalizePathForCompare(dir)
+	return normalizedTarget == normalizedDir || strings.HasPrefix(normalizedTarget, normalizedDir+string(filepath.Separator))
+}
+
+func normalizePossiblyDeletedPath(path string) string {
+	path = strings.TrimSpace(strings.TrimSuffix(path, " (deleted)"))
+	if path == "" {
+		return ""
+	}
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if dir == "." || dir == string(filepath.Separator) {
+		return normalizePathForCompare(path)
+	}
+	return filepath.Join(normalizePathForCompare(dir), base)
 }
 
 func processHasDeletedDataInodesWithin(pid int, dataDir string, timeout time.Duration) bool {

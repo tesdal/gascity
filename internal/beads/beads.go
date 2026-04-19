@@ -15,7 +15,7 @@ var ErrNotFound = errors.New("bead not found")
 type Bead struct {
 	ID           string            `json:"id"`
 	Title        string            `json:"title"`
-	Status       string            `json:"status"`     // "open", "in_progress", "closed"
+	Status       string            `json:"status"`     // backend lifecycle status; defaults to "open"
 	Type         string            `json:"issue_type"` // "task" default; matches bd wire format
 	Priority     *int              `json:"priority,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`

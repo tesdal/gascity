@@ -44,7 +44,6 @@ func newEventsCmd(stdout, stderr io.Writer) *cobra.Command {
 	var afterFlag uint64
 	var afterCursor string
 	var payloadMatch []string
-	var jsonFlagDeprecated bool
 
 	cmd := &cobra.Command{
 		Use:   "events",
@@ -104,8 +103,6 @@ DTO or SSE envelope.`,
 	cmd.Flags().Uint64Var(&afterFlag, "after", 0, "Resume from this city event sequence number (city scope only)")
 	cmd.Flags().StringVar(&afterCursor, "after-cursor", "", "Resume from this supervisor event cursor (supervisor scope only)")
 	cmd.Flags().StringArrayVar(&payloadMatch, "payload-match", nil, "Filter by payload field (key=value, repeatable)")
-	cmd.Flags().BoolVar(&jsonFlagDeprecated, "json", false, "Deprecated: output is always JSONL. Accepted for back-compat.")
-	_ = cmd.Flags().MarkDeprecated("json", "output is always JSONL; the flag is now a no-op and will be removed in a future release")
 	return cmd
 }
 
@@ -213,15 +210,11 @@ func resolveEventsScope(apiURLOverride string) (eventsAPIScope, error) {
 			"gc supervisor start",
 		)
 	}
-	// Standalone-controller mode: the controller's API now serves
-	// supervisor-shaped /v0/city/{cityName}/... routes, so `gc events`
-	// can target it directly. Fall through to auto-discovery instead
-	// of rejecting.
 	if hasStandaloneDashboardAPI(cfg) {
-		return eventsAPIScope{
-			apiURL:   strings.TrimRight(standaloneAPIBaseURL(cfg), "/"),
-			cityName: cityName,
-		}, nil
+		return eventsAPIScope{}, fmt.Errorf(
+			"gc events requires the supervisor API; standalone city APIs do not expose /v0/city/{cityName}/events. Start the supervisor with %q or pass --api to a supervisor endpoint explicitly",
+			"gc supervisor start",
+		)
 	}
 	return eventsAPIScope{}, fmt.Errorf(
 		"could not auto-discover the supervisor API for %q; start the supervisor with %q or pass --api explicitly",
@@ -472,24 +465,12 @@ func fetchCityHeadIndex(ctx context.Context, client *genclient.ClientWithRespons
 }
 
 func fetchSupervisorEvents(ctx context.Context, client *genclient.ClientWithResponses, typeFilter, sinceFlag string) ([]genclient.WireTaggedEvent, error) {
-	return fetchSupervisorEventsWithLimit(ctx, client, typeFilter, sinceFlag, 0)
-}
-
-// fetchSupervisorEventsWithLimit is like fetchSupervisorEvents but applies
-// a server-side result cap when limit > 0. The supervisor returns the
-// most recent `limit` events. Used by fetchSupervisorHeadCursor so
-// computing the head cursor is a cheap round-trip instead of downloading
-// every event in the supervisor's history.
-func fetchSupervisorEventsWithLimit(ctx context.Context, client *genclient.ClientWithResponses, typeFilter, sinceFlag string, limit int64) ([]genclient.WireTaggedEvent, error) {
 	params := &genclient.GetV0EventsParams{}
 	if strings.TrimSpace(typeFilter) != "" {
 		params.Type = &typeFilter
 	}
 	if strings.TrimSpace(sinceFlag) != "" {
 		params.Since = &sinceFlag
-	}
-	if limit > 0 {
-		params.Limit = &limit
 	}
 	resp, err := client.GetV0EventsWithResponse(ctx, params)
 	if err != nil {
@@ -504,24 +485,8 @@ func fetchSupervisorEventsWithLimit(ctx context.Context, client *genclient.Clien
 	return *resp.JSON200.Items, nil
 }
 
-// fetchSupervisorHeadCursor asks the supervisor for its current head
-// cursor. The cursor is composite: `{city: max_seq, ...}` — one seq per
-// city. To compute it correctly we need at least one event per city, so
-// fetching with Limit=1 would be wrong (it would only yield the single
-// most recent event, dropping every other city from the cursor).
-//
-// Until the supervisor exposes a dedicated head-cursor endpoint, we
-// fetch events with a modest tail limit and let supervisorCursorFor
-// extract per-city maxima. The tail bound keeps the bootstrap cheap on
-// long-running supervisors without losing the per-city cursor coverage
-// needed for reconnects. Callers that cannot tolerate missing a city
-// that has been quiet for the tail window should rely on the composite
-// cursor's forward-only semantics — the supervisor stream will replay
-// that city's events from seq 0 on a reconnect.
-const supervisorHeadCursorLimit = 256
-
 func fetchSupervisorHeadCursor(ctx context.Context, client *genclient.ClientWithResponses) (string, error) {
-	items, err := fetchSupervisorEventsWithLimit(ctx, client, "", "", supervisorHeadCursorLimit)
+	items, err := fetchSupervisorEvents(ctx, client, "", "")
 	if err != nil {
 		return "", err
 	}
@@ -647,100 +612,34 @@ func filterSupervisorEventsAfterCursor(items []genclient.WireTaggedEvent, cursor
 	return out
 }
 
-// Reconnect backoff schedule for --follow streams. Short enough to
-// resume quickly after a supervisor restart, capped so repeated
-// failures do not DOS the server from many clients at once. The
-// schedule resets after a stream session that delivered at least
-// one frame.
-const (
-	streamReconnectInitial = 1 * time.Second
-	streamReconnectMax     = 30 * time.Second
-)
-
-// streamReconnectBackoff returns the next delay given the current
-// attempt count (0 = first retry). Doubles up to streamReconnectMax.
-func streamReconnectBackoff(attempt int) time.Duration {
-	d := streamReconnectInitial
-	for i := 0; i < attempt; i++ {
-		d *= 2
-		if d >= streamReconnectMax {
-			return streamReconnectMax
-		}
-	}
-	return d
-}
-
 func streamCityEvents(ctx context.Context, client *genclient.ClientWithResponses, cityName string, afterSeq uint64, typeFilter string, payloadMatch map[string][]string, stopAfterMatch bool, stdout, stderr io.Writer) int {
-	resumeSeq := afterSeq
-	attempt := 0
-	for {
-		exitCode, newSeq, reconnect := streamCityEventsOnce(ctx, client, cityName, resumeSeq, typeFilter, payloadMatch, stopAfterMatch, stdout, stderr)
-		if !reconnect {
-			return exitCode
-		}
-		// Delivered a frame this session? Reset backoff so a long-lived
-		// connection that finally drops retries quickly, not at max.
-		if newSeq > resumeSeq {
-			resumeSeq = newSeq
-			attempt = 0
-		}
-		// Clean EOF in follow mode → reconnect with the latest seq,
-		// backing off exponentially so we don't DOS a down supervisor.
-		delay := streamReconnectBackoff(attempt)
-		attempt++
-		select {
-		case <-ctx.Done():
-			return 0
-		case <-time.After(delay):
-		}
-	}
-}
-
-// streamCityEventsOnce runs one connection lifetime of the city events
-// stream. Returns (exitCode, lastSeenSeq, reconnect). When reconnect is
-// true, the caller should retry with lastSeenSeq. reconnect is true only
-// when stopAfterMatch is false and the stream ended cleanly (EOF).
-func streamCityEventsOnce(ctx context.Context, client *genclient.ClientWithResponses, cityName string, afterSeq uint64, typeFilter string, payloadMatch map[string][]string, stopAfterMatch bool, stdout, stderr io.Writer) (int, uint64, bool) {
 	after := strconv.FormatUint(afterSeq, 10)
 	resp, err := client.StreamEvents(ctx, cityName, &genclient.StreamEventsParams{AfterSeq: &after})
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return 0, afterSeq, false
-		}
-		// In follow mode, a transient setup failure (supervisor restart,
-		// brief network blip) should loop through the outer backoff
-		// rather than exiting status=1. --watch is bounded by its own
-		// timeout so stopAfterMatch=true still exits on setup failure.
-		if !stopAfterMatch {
-			fmt.Fprintf(stderr, "gc events: connect failed, retrying: %v\n", err) //nolint:errcheck
-			return 0, afterSeq, true
+			return 0
 		}
 		fmt.Fprintf(stderr, "gc events: %v\n", err) //nolint:errcheck
-		return 1, afterSeq, false
+		return 1
 	}
 	if resp.StatusCode != http.StatusOK {
-		return printStreamError(resp, stderr), afterSeq, false
+		return printStreamError(resp, stderr)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	lastSeq := afterSeq
 	decoder := newSSEDecoder(resp.Body)
 	for {
 		frame, err := decoder.Next()
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
-				return 0, lastSeq, false
+				return 0
 			}
 			if errors.Is(err, io.EOF) {
-				if stopAfterMatch {
-					fmt.Fprintln(stderr, "gc events: stream ended before a matching event arrived") //nolint:errcheck
-					return 1, lastSeq, false
-				}
-				// Follow mode: reconnect with lastSeq.
-				return 0, lastSeq, true
+				fmt.Fprintln(stderr, "gc events: stream ended before a matching event arrived") //nolint:errcheck
+				return 1
 			}
 			fmt.Fprintf(stderr, "gc events: %v\n", err) //nolint:errcheck
-			return 1, lastSeq, false
+			return 1
 		}
 		if frame.Event == "heartbeat" || strings.TrimSpace(frame.Data) == "" {
 			continue
@@ -752,10 +651,7 @@ func streamCityEventsOnce(ctx context.Context, client *genclient.ClientWithRespo
 		var envelope genclient.EventStreamEnvelope
 		if err := json.Unmarshal([]byte(frame.Data), &envelope); err != nil {
 			fmt.Fprintf(stderr, "gc events: decode: %v\n", err) //nolint:errcheck
-			return 1, lastSeq, false
-		}
-		if envelope.Seq > 0 && uint64(envelope.Seq) > lastSeq {
-			lastSeq = uint64(envelope.Seq)
+			return 1
 		}
 		if typeFilter != "" && envelope.Type != typeFilter {
 			continue
@@ -765,38 +661,15 @@ func streamCityEventsOnce(ctx context.Context, client *genclient.ClientWithRespo
 		}
 		if err := writeJSONLValue(stdout, envelope); err != nil {
 			fmt.Fprintf(stderr, "gc events: marshal: %v\n", err) //nolint:errcheck
-			return 1, lastSeq, false
+			return 1
 		}
 		if stopAfterMatch {
-			return 0, lastSeq, false
+			return 0
 		}
 	}
 }
 
 func streamSupervisorEvents(ctx context.Context, client *genclient.ClientWithResponses, afterCursor, typeFilter string, payloadMatch map[string][]string, stopAfterMatch bool, stdout, stderr io.Writer) int {
-	cursor := afterCursor
-	attempt := 0
-	for {
-		exitCode, newCursor, reconnect := streamSupervisorEventsOnce(ctx, client, cursor, typeFilter, payloadMatch, stopAfterMatch, stdout, stderr)
-		if !reconnect {
-			return exitCode
-		}
-		// Reset backoff when we advanced the cursor this session.
-		if newCursor != "" && newCursor != cursor {
-			cursor = newCursor
-			attempt = 0
-		}
-		delay := streamReconnectBackoff(attempt)
-		attempt++
-		select {
-		case <-ctx.Done():
-			return 0
-		case <-time.After(delay):
-		}
-	}
-}
-
-func streamSupervisorEventsOnce(ctx context.Context, client *genclient.ClientWithResponses, afterCursor, typeFilter string, payloadMatch map[string][]string, stopAfterMatch bool, stdout, stderr io.Writer) (int, string, bool) {
 	params := &genclient.StreamSupervisorEventsParams{}
 	if strings.TrimSpace(afterCursor) != "" {
 		params.AfterCursor = &afterCursor
@@ -804,48 +677,31 @@ func streamSupervisorEventsOnce(ctx context.Context, client *genclient.ClientWit
 	resp, err := client.StreamSupervisorEvents(ctx, params)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return 0, afterCursor, false
-		}
-		// Follow mode: transient connect failures loop through the
-		// outer backoff. --watch (stopAfterMatch=true) is bounded by
-		// its own timeout and still exits on setup failure.
-		if !stopAfterMatch {
-			fmt.Fprintf(stderr, "gc events: connect failed, retrying: %v\n", err) //nolint:errcheck
-			return 0, afterCursor, true
+			return 0
 		}
 		fmt.Fprintf(stderr, "gc events: %v\n", err) //nolint:errcheck
-		return 1, afterCursor, false
+		return 1
 	}
 	if resp.StatusCode != http.StatusOK {
-		return printStreamError(resp, stderr), afterCursor, false
+		return printStreamError(resp, stderr)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	lastCursor := afterCursor
-	cursors := events.ParseCursor(lastCursor)
 	decoder := newSSEDecoder(resp.Body)
 	for {
 		frame, err := decoder.Next()
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
-				return 0, lastCursor, false
+				return 0
 			}
 			if errors.Is(err, io.EOF) {
-				if stopAfterMatch {
-					fmt.Fprintln(stderr, "gc events: stream ended before a matching event arrived") //nolint:errcheck
-					return 1, lastCursor, false
-				}
-				return 0, lastCursor, true
+				fmt.Fprintln(stderr, "gc events: stream ended before a matching event arrived") //nolint:errcheck
+				return 1
 			}
 			fmt.Fprintf(stderr, "gc events: %v\n", err) //nolint:errcheck
-			return 1, lastCursor, false
+			return 1
 		}
 		if frame.Event == "heartbeat" || strings.TrimSpace(frame.Data) == "" {
-			// Reconnect SSE ID carries composite cursor updates, preserved via frame.ID.
-			if strings.TrimSpace(frame.ID) != "" {
-				lastCursor = frame.ID
-				cursors = events.ParseCursor(lastCursor)
-			}
 			continue
 		}
 		if frame.Event != "" && frame.Event != "tagged_event" {
@@ -855,18 +711,7 @@ func streamSupervisorEventsOnce(ctx context.Context, client *genclient.ClientWit
 		var envelope genclient.TaggedEventStreamEnvelope
 		if err := json.Unmarshal([]byte(frame.Data), &envelope); err != nil {
 			fmt.Fprintf(stderr, "gc events: decode: %v\n", err) //nolint:errcheck
-			return 1, lastCursor, false
-		}
-		// Track per-city seq in the composite cursor so reconnects resume
-		// exactly where we left off.
-		if envelope.City != "" && envelope.Seq > 0 {
-			if cursors == nil {
-				cursors = map[string]uint64{}
-			}
-			if uint64(envelope.Seq) > cursors[envelope.City] {
-				cursors[envelope.City] = uint64(envelope.Seq)
-			}
-			lastCursor = events.FormatCursor(cursors)
+			return 1
 		}
 		if typeFilter != "" && envelope.Type != typeFilter {
 			continue
@@ -876,10 +721,10 @@ func streamSupervisorEventsOnce(ctx context.Context, client *genclient.ClientWit
 		}
 		if err := writeJSONLValue(stdout, envelope); err != nil {
 			fmt.Fprintf(stderr, "gc events: marshal: %v\n", err) //nolint:errcheck
-			return 1, lastCursor, false
+			return 1
 		}
 		if stopAfterMatch {
-			return 0, lastCursor, false
+			return 0
 		}
 	}
 }

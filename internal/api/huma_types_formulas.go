@@ -1,11 +1,5 @@
 package api
 
-import (
-	"strings"
-
-	"github.com/danielgtaylor/huma/v2"
-)
-
 // Per-domain Huma input/output types for the formulas handler
 // group. Split out of the original huma_types.go; mirrors the layout
 // of huma_handlers_formulas.go.
@@ -145,23 +139,6 @@ type FormulaDetailInput struct {
 	ScopeKind string `query:"scope_kind" required:"false" doc:"Scope kind (city or rig)."`
 	ScopeRef  string `query:"scope_ref" required:"false" doc:"Scope reference."`
 	Target    string `query:"target" required:"true" doc:"Target agent for preview compilation."`
-}
-
-// Resolve rejects legacy `var.<name>=<value>` query parameters with a
-// 400 + migration hint so silent-ignore does not mask a bookmark or
-// curl script that expects variable substitution.
-func (i *FormulaDetailInput) Resolve(ctx huma.Context, _ *huma.PathBuffer) []error {
-	u := ctx.URL()
-	for name := range u.Query() {
-		if strings.HasPrefix(name, "var.") {
-			return []error{&huma.ErrorDetail{
-				Location: "query." + name,
-				Message: "GET formulas/{name} no longer accepts var.* query parameters; " +
-					"use POST formulas/{name}/preview with a typed vars body instead",
-			}}
-		}
-	}
-	return nil
 }
 
 // FormulaPreviewBody is the request body for POST /v0/city/{cityName}/formulas/{name}/preview.

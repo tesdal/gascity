@@ -81,24 +81,25 @@ func TestInstallClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	// Post stale-mirror fix: hooks/claude.json is no longer seeded on
-	// fresh installs. The gc-managed .gc/settings.json is the sole
-	// Install output for a claude-only fresh install.
-	if _, ok := fs.Files["/city/hooks/claude.json"]; ok {
-		t.Fatal("hooks/claude.json should NOT be written on fresh install (stale-mirror risk)")
+	data, ok := fs.Files["/city/hooks/claude.json"]
+	if !ok {
+		t.Fatal("expected /city/hooks/claude.json to be written")
 	}
 	runtimeData, ok := fs.Files["/city/.gc/settings.json"]
 	if !ok {
 		t.Fatal("expected /city/.gc/settings.json to be written")
 	}
-	s := string(runtimeData)
+	s := string(data)
 	if !strings.Contains(s, "SessionStart") {
 		t.Error("claude settings should contain SessionStart hook")
 	}
-	if !strings.Contains(claudeHookCommand(t, runtimeData, "SessionStart"), "gc prime --hook") {
+	if string(runtimeData) != string(data) {
+		t.Error("runtime Claude settings should mirror hooks/claude.json")
+	}
+	if !strings.Contains(claudeHookCommand(t, data, "SessionStart"), "gc prime --hook") {
 		t.Error("claude SessionStart hook should contain gc prime --hook")
 	}
-	if !strings.Contains(claudeHookCommand(t, runtimeData, "PreCompact"), `gc handoff "context cycle"`) {
+	if !strings.Contains(claudeHookCommand(t, data, "PreCompact"), `gc handoff "context cycle"`) {
 		t.Error("claude PreCompact hook should use gc handoff (not gc prime) to avoid context accumulation on compaction")
 	}
 	if !strings.Contains(s, "gc nudge drain --inject") {
@@ -170,14 +171,8 @@ func TestInstallClaudeMergesCityDotClaudeSettings(t *testing.T) {
 	if !strings.Contains(data, "SessionStart") {
 		t.Fatalf("runtime settings lost default hooks during merge:\n%s", data)
 	}
-	// With the stale-mirror fix, installClaude no longer writes to
-	// hooks/claude.json when the source is .claude/settings.json.
-	// Writing a mirror would produce a stale file: if the user later
-	// removes .claude/settings.json, desiredClaudeSettings would fall
-	// back to the mirror as "legacy hook" and ship previous-generation
-	// settings instead of current defaults.
-	if _, ok := fs.Files["/city/hooks/claude.json"]; ok {
-		t.Fatalf("hooks/claude.json should NOT be written when source is .claude/settings.json (stale-mirror risk)")
+	if string(fs.Files["/city/hooks/claude.json"]) != data {
+		t.Fatal("hooks/claude.json should mirror merged Claude runtime settings")
 	}
 }
 
@@ -513,9 +508,9 @@ func TestInstallMultipleProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	// Post stale-mirror fix: hooks/claude.json is no longer written on
-	// fresh installs (only when the user explicitly uses it as the
-	// source). The gc-managed .gc/settings.json is what Install produces.
+	if _, ok := fs.Files["/city/hooks/claude.json"]; !ok {
+		t.Error("missing claude settings")
+	}
 	if _, ok := fs.Files["/city/.gc/settings.json"]; !ok {
 		t.Error("missing claude runtime settings")
 	}

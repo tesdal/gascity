@@ -1,19 +1,18 @@
 import { cityScope } from "./api";
 import { renderCityTabs } from "./panels/cities";
 import { renderStatus } from "./panels/status";
-import { renderCrew, installCrewInteractions, closeLogDrawerExternal } from "./panels/crew";
+import { renderCrew, installCrewInteractions } from "./panels/crew";
 import { renderIssues, installIssueInteractions } from "./panels/issues";
 import { renderMail, installMailInteractions } from "./panels/mail";
 import { renderConvoys, installConvoyInteractions } from "./panels/convoys";
-import { eventTypeFromMessage, loadActivityHistory, startActivityStream, stopActivityStream, installActivityInteractions } from "./panels/activity";
+import { eventTypeFromMessage, loadActivityHistory, startActivityStream, installActivityInteractions } from "./panels/activity";
 import { renderAdminPanels, installAdminInteractions } from "./panels/admin";
 import { invalidateOptions } from "./panels/options";
-import { installPanelAffordances, popPause, refreshPaused, reportUIError, setPopPauseListener } from "./ui";
+import { installPanelAffordances, popPause, refreshPaused, reportUIError } from "./ui";
 import { installCommandPalette } from "./palette";
 import { installDashboardLogging, logInfo } from "./logger";
 import {
   consumeInvalidated,
-  currentCityStatus,
   invalidateAll,
   invalidateForEventType,
   syncCityScopeFromLocation,
@@ -34,21 +33,11 @@ const CITY_SCOPED_PANEL_IDS = [
   "queues-panel",
   "beads-panel",
   "assigned-panel",
-  "agent-log-drawer",
 ];
 
 async function refreshAll(): Promise<void> {
   if (refreshPaused()) return;
   await refreshVisibleResources();
-}
-
-// flushPendingInvalidations renders any resources that were marked dirty
-// while the UI was paused (modal open, panel expanded). Called by ui.ts
-// from popPause() when the pause counter returns to zero, so the
-// dashboard catches up rather than staying stale.
-export async function flushPendingInvalidations(): Promise<void> {
-  if (refreshPaused()) return;
-  await refreshVisibleResources().catch((error) => reportUIError("Catch-up refresh failed", error));
 }
 
 async function refreshAllForced(): Promise<void> {
@@ -57,27 +46,13 @@ async function refreshAllForced(): Promise<void> {
 }
 
 function wireSSE(): void {
-  // Stopped-city gate: do not open a city-scoped stream when the
-  // selected city is not running. connectCityEvents' auto-reconnect
-  // loop would otherwise sit in "Reconnecting…" forever, hammering
-  // the supervisor with every backoff tick. Supervisor-scope streams
-  // (kind === "supervisor") always open.
-  const status = currentCityStatus();
-  if (status.kind === "not-running" || status.kind === "unknown") {
-    stopActivityStream();
-    setConnectionBadge("connecting"); // visible "not wired" state; re-wires on next city switch
-    return;
-  }
   setConnectionBadge("connecting");
   startActivityStream(
     (msg) => {
+      if (refreshPaused()) return;
       const eventType = eventTypeFromMessage(msg);
       if (!eventType || eventType === "heartbeat") return;
-      // Always mark the dirty set — the pause guard only defers the
-      // render. Without this, events that arrive while a modal is open
-      // get dropped and panels stay stale after the modal closes.
       invalidateForEventType(eventType);
-      if (refreshPaused()) return;
       void refreshVisibleResources().catch((error) => reportUIError("Refresh failed", error));
     },
     setConnectionBadge,
@@ -114,11 +89,6 @@ async function boot(): Promise<void> {
   logInfo("dashboard", "Boot start", { city: cityScope(), href: window.location.href });
   installInteractions();
   installCityScopeNavigation();
-  // Catch up when the last pause lifts: renders deferred-while-paused
-  // resources so the UI isn't stale after modals close.
-  setPopPauseListener(() => {
-    void flushPendingInvalidations();
-  });
   await refreshAllForced();
   wireSSE();
   logInfo("dashboard", "Boot complete", { city: cityScope(), href: window.location.href });
@@ -161,33 +131,20 @@ function installCityScopeNavigation(): void {
 
   window.addEventListener("popstate", () => {
     logInfo("dashboard", "Popstate navigation", { href: window.location.href });
-    // Same rationale as navigateCityScope: tear down city-owned
-    // subviews before we leave the current scope.
-    closeLogDrawerExternal();
     syncCityScopeFromLocation();
     invalidateAll();
     void refreshVisibleResources().catch((error) => reportUIError("Refresh failed", error));
-    // Reuse wireSSE (not bare startActivityStream) so live invalidation
-    // and the connection badge callback stay wired after back/forward.
-    wireSSE();
+    startActivityStream();
   });
 }
 
 async function navigateCityScope(nextURL: string): Promise<void> {
   logInfo("dashboard", "Navigate city scope", { nextURL });
-  // Close any city-owned subviews (log drawer + its session stream +
-  // its pushPause token) BEFORE the scope actually changes. Without
-  // this a drawer open at click time keeps its stream alive into the
-  // next scope and pauseCount stays > 0 → every refresh is skipped.
-  closeLogDrawerExternal();
   window.history.pushState({}, "", nextURL);
   syncCityScopeFromLocation();
   invalidateAll();
   await refreshVisibleResources();
-  // Reuse wireSSE so live invalidation + badge callback stay wired after
-  // the new city scope opens its stream. Calling bare startActivityStream
-  // here loses the SSE→panel invalidation bridge.
-  wireSSE();
+  startActivityStream();
 }
 
 function syncCityScopedPanels(hasCity: boolean): void {
@@ -220,16 +177,11 @@ async function refreshVisibleResources(force = false): Promise<void> {
   }
 
   const tasks: Array<Promise<void>> = [];
-  const status = currentCityStatus();
-  const hasRunningCity = status.kind === "running";
+  const hasCity = cityScope() !== "";
 
   queueRefresh(tasks, dirty, "status", () => renderStatus());
   queueRefresh(tasks, dirty, "activity", () => loadActivityHistory());
-  // Only fan out per-city fetches when the selected city is actually
-  // running. Stopped/unknown cities return 404 for every endpoint,
-  // which cascades into a console full of errors for the user. Let
-  // renderStatus surface the "city not running" banner instead.
-  if (hasRunningCity) {
+  if (hasCity) {
     queueRefresh(tasks, dirty, "crew", () => renderCrew());
     queueRefresh(tasks, dirty, "issues", () => renderIssues());
     queueRefresh(tasks, dirty, "mail", () => renderMail());

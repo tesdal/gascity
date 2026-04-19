@@ -172,17 +172,8 @@ func (s *Server) enrichSessionResponse(resp *sessionResponse, info session.Info,
 	resp.Running = sp.IsRunning(info.SessionName)
 
 	// Active bead: search rig stores for in_progress work assigned to the
-	// concrete session first, then fall back to alias/runtime/session names.
-	// Alias inclusion preserves compatibility with role flows that assign
-	// by alias (e.g., mayor, sky, wolf) until all assigners migrate to the
-	// concrete session ID.
-	//
-	// Signature is findActiveBeadForAssignees(rig string, assignees ...string);
-	// pass "" for rig (search all rigs) and put info.Alias in the variadic.
-	// A previous fix accidentally passed info.Alias as the first positional
-	// (rig) argument, which silently narrowed the search to a rig named after
-	// the alias — so alias-assigned work still disappeared from ActiveBead.
-	resp.ActiveBead = s.findActiveBeadForAssignees("", info.ID, info.SessionName, info.Alias, info.Template)
+	// concrete session first, then fall back to runtime/session names.
+	resp.ActiveBead = s.findActiveBeadForAssignees("", info.ID, info.SessionName, info.Template)
 
 	// Peek preview (opt-in, only when running).
 	if wantPeek && resp.Running {

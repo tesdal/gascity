@@ -498,8 +498,10 @@ gc convoy
 | [gc convoy control](#gc-convoy-control) | Execute control beads or run the control-dispatcher loop |
 | [gc convoy create](#gc-convoy-create) | Create a convoy and optionally track issues |
 | [gc convoy delete](#gc-convoy-delete) | Close and optionally delete a convoy and all its beads |
+| [gc convoy delete-source](#gc-convoy-delete-source) | Close workflows sourced from a bead |
 | [gc convoy land](#gc-convoy-land) | Land an owned convoy (terminate + cleanup) |
 | [gc convoy list](#gc-convoy-list) | List open convoys with progress |
+| [gc convoy reopen-source](#gc-convoy-reopen-source) | Reopen a source bead after workflow cleanup |
 | [gc convoy status](#gc-convoy-status) | Show detailed convoy status |
 | [gc convoy stranded](#gc-convoy-stranded) | Find convoys with ready work but no workers |
 | [gc convoy target](#gc-convoy-target) | Set the target branch on a convoy |
@@ -599,6 +601,23 @@ gc convoy delete <convoy-id> [flags]
 | `--delete` | bool |  | Also delete beads from the store after closing |
 | `-f`, `--force` | bool |  | Actually close/delete (without this, shows preview) |
 
+## gc convoy delete-source
+
+Find every live workflow root sourced from the given bead and close
+its subtree. By default this is a preview. Use --apply to mutate.
+Use --delete with --apply to also delete closed beads.
+
+```
+gc convoy delete-source <source-bead-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--apply` | bool |  | Actually close/delete matched workflows |
+| `--delete` | bool |  | Also delete beads from the store after closing |
+| `--rig` | string |  | Select the rig store for the source bead |
+| `--store-ref` | string |  | Select the source bead store (city:&lt;name&gt; or rig:&lt;name&gt;) |
+
 ## gc convoy land
 
 Land an owned convoy, verifying all children are closed.
@@ -634,6 +653,19 @@ child issues.
 ```
 gc convoy list
 ```
+
+## gc convoy reopen-source
+
+Reopen a source bead after workflow cleanup
+
+```
+gc convoy reopen-source <source-bead-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--rig` | string |  | Select the rig store for the source bead |
+| `--store-ref` | string |  | Select the source bead store (city:&lt;name&gt; or rig:&lt;name&gt;) |
 
 ## gc convoy status
 

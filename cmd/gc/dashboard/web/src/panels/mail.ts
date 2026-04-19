@@ -1,5 +1,5 @@
 import type { MailRecord } from "../api";
-import { api, cityScope } from "../api";
+import { api, apiErrorMessage, cityScope, mutationHeaders } from "../api";
 import { logError, logInfo, logWarn } from "../logger";
 import { byId, clear, el } from "../util/dom";
 import { formatAgentAddress, formatTimestamp } from "../util/legacy";
@@ -188,7 +188,7 @@ async function openMessage(messageID: string): Promise<void> {
   }
   currentMessage = res.data;
   await api.POST("/v0/city/{cityName}/mail/{id}/read", {
-    params: { path: { cityName: city, id: messageID } },
+    params: { path: { cityName: city, id: messageID }, header: mutationHeaders },
   });
   currentMessage.read = true;
   showMailDetail(currentMessage, [currentMessage]);
@@ -356,11 +356,11 @@ async function sendCurrentMessage(): Promise<void> {
 
   const response = replyTo
     ? await api.POST("/v0/city/{cityName}/mail/{id}/reply", {
-        params: { path: { cityName: city, id: replyTo } },
+        params: { path: { cityName: city, id: replyTo }, header: mutationHeaders },
         body: { body, subject },
       })
     : await api.POST("/v0/city/{cityName}/mail", {
-        params: { path: { cityName: city } },
+        params: { path: { cityName: city }, header: mutationHeaders },
         body: { to, subject, body, from: "dashboard" },
       });
 
@@ -373,7 +373,7 @@ async function sendCurrentMessage(): Promise<void> {
       subject,
       to,
     });
-    showToast("error", "Send failed", response.error.detail ?? "Could not send message");
+    showToast("error", "Send failed", apiErrorMessage(response.error, "Could not send message"));
     return;
   }
 
@@ -396,10 +396,10 @@ async function archiveMessage(id: string): Promise<void> {
   const city = cityScope();
   if (!city) return;
   const res = await api.POST("/v0/city/{cityName}/mail/{id}/archive", {
-    params: { path: { cityName: city, id } },
+    params: { path: { cityName: city, id }, header: mutationHeaders },
   });
   if (res.error) {
-    showToast("error", "Archive failed", res.error.detail ?? "Could not archive message");
+    showToast("error", "Archive failed", apiErrorMessage(res.error, "Could not archive message"));
     return;
   }
   showToast("success", "Archived", id);
@@ -413,14 +413,15 @@ async function archiveMessage(id: string): Promise<void> {
 async function toggleUnread(message: MailRecord): Promise<void> {
   const city = cityScope();
   if (!city || !message.id) return;
-  const route = message.read
-    ? "/v0/city/{cityName}/mail/{id}/mark-unread"
-    : "/v0/city/{cityName}/mail/{id}/read";
-  const res = await api.POST(route, {
-    params: { path: { cityName: city, id: message.id } },
-  });
+  const res = message.read
+    ? await api.POST("/v0/city/{cityName}/mail/{id}/mark-unread", {
+        params: { path: { cityName: city, id: message.id }, header: mutationHeaders },
+      })
+    : await api.POST("/v0/city/{cityName}/mail/{id}/read", {
+        params: { path: { cityName: city, id: message.id }, header: mutationHeaders },
+      });
   if (res.error) {
-    showToast("error", "Update failed", res.error.detail ?? "Could not update message");
+    showToast("error", "Update failed", apiErrorMessage(res.error, "Could not update message"));
     return;
   }
   message.read = !message.read;

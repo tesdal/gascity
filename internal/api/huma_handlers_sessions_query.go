@@ -55,21 +55,18 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 	}
 
 	pp := pageParams{
-		Offset:   decodeCursor(input.Cursor),
+		Offset:   decodeCursor(input.Cursor.Value),
 		Limit:    limit,
-		IsPaging: input.cursorPresent,
+		IsPaging: input.Cursor.IsSet,
 	}
 
 	if !pp.IsPaging {
-		// No pagination cursor — capture the full match count BEFORE truncating
-		// so clients can tell how many items exist vs. how many fit the page.
-		total := len(items)
+		// No pagination cursor — just cap at limit.
 		if pp.Limit < len(items) {
 			items = items[:pp.Limit]
 		}
 		return &ListOutput[sessionResponse]{
-			Index: s.latestIndex(),
-			Body:  ListBody[sessionResponse]{Items: items, Total: total},
+			Body: ListBody[sessionResponse]{Items: items, Total: len(items)},
 		}, nil
 	}
 
@@ -78,8 +75,7 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 		page = []sessionResponse{}
 	}
 	return &ListOutput[sessionResponse]{
-		Index: s.latestIndex(),
-		Body:  ListBody[sessionResponse]{Items: page, Total: total, NextCursor: nextCursor},
+		Body: ListBody[sessionResponse]{Items: page, Total: total, NextCursor: nextCursor},
 	}, nil
 }
 
@@ -167,7 +163,7 @@ func (s *Server) humaHandleSessionTranscript(_ context.Context, input *SessionTr
 					Template:   info.Template,
 					Provider:   info.Provider,
 					Format:     "raw",
-					Messages:   wrapRawFrameBytes(rawSess.RawPayloadBytes()),
+					Messages:   wrapRawFrames(rawSess.RawPayloads()),
 					Pagination: rawSess.Pagination,
 				},
 			}, nil

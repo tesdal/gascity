@@ -42,12 +42,17 @@ type slingResponse struct {
 	Warnings       []string `json:"warnings,omitempty"`
 }
 
-// execSling calls the intent-based Sling API directly. The Huma handler
-// humaHandleSling performs all validation before calling this.
-func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slingResponse, int, string, string) {
-	cfg := s.state.Config()
-	agentCfg, _ := findAgent(cfg, body.Target)
+func sourceWorkflowCleanupHint(sourceBeadID, storeRef string) string {
+	args := []string{"gc workflow delete-source", sourceBeadID}
+	if storeRef = strings.TrimSpace(storeRef); storeRef != "" {
+		args = append(args, "--store-ref", storeRef)
+	}
+	args = append(args, "--apply")
+	return strings.Join(args, " ")
+}
 
+// execSlingDirect calls the intent-based Sling API directly.
+func (s *Server) execSlingDirect(ctx context.Context, body slingBody, agentCfg config.Agent) (*slingResponse, int, string, string, *sourceworkflow.ConflictError) {
 	formulaName := strings.TrimSpace(body.Formula)
 	attachedBeadID := strings.TrimSpace(body.AttachedBeadID)
 
@@ -70,7 +75,7 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 	}
 	sl, err := sling.New(deps)
 	if err != nil {
-		return nil, http.StatusInternalServerError, "internal", err.Error()
+		return nil, http.StatusInternalServerError, "internal", err.Error(), nil
 	}
 
 	// Build vars slice from map (sorted for determinism).
@@ -127,9 +132,9 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 	if err != nil {
 		var conflictErr *sourceworkflow.ConflictError
 		if errors.As(err, &conflictErr) {
-			return nil, http.StatusConflict, "conflict", err.Error()
+			return nil, http.StatusConflict, "conflict", err.Error(), conflictErr
 		}
-		return nil, http.StatusBadRequest, "invalid", err.Error()
+		return nil, http.StatusBadRequest, "invalid", err.Error(), nil
 	}
 
 	resp := &slingResponse{
@@ -140,7 +145,7 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 		Warnings: result.MetadataErrors,
 	}
 	if !workflowLaunch {
-		return resp, http.StatusOK, "", ""
+		return resp, http.StatusOK, "", "", nil
 	}
 
 	resp.Formula = formulaName
@@ -149,9 +154,9 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 	resp.WorkflowID = result.WorkflowID
 	resp.RootBeadID = result.BeadID
 	if resp.WorkflowID == "" && resp.RootBeadID == "" {
-		return nil, http.StatusInternalServerError, "internal", "sling did not produce a workflow or bead id"
+		return nil, http.StatusInternalServerError, "internal", "sling did not produce a workflow or bead id", nil
 	}
-	return resp, http.StatusCreated, "", ""
+	return resp, http.StatusCreated, "", "", nil
 }
 
 // findSlingStore returns the bead store for sling operations.
@@ -236,21 +241,48 @@ func mergeEnvForSling(extra map[string]string) []string {
 }
 
 // apiAgentResolver implements sling.AgentResolver for the API context.
-// Mirrors the CLI's rig-context behavior for bare agent names while still
-// delegating qualified and city-scoped lookups to findAgent.
+// Mirrors the CLI's resolveAgentIdentity rig-context behavior (step 1)
+// so formula child steps with bare assignees route to the same rig as
+// the top-level target when dispatched through the API (e.g. gasworks-gui
+// UI).
+//
+// Intentional divergence from cmd/gc/cmd_agent.go:resolveAgentIdentity:
+//
+//   - Step 3 (unambiguous bare-name fallback across all rigs) is
+//     deliberately not implemented here. UI/API dispatches always carry
+//     scope_kind+scope_ref when they want rig routing; without that
+//     context, routing to a single rig-scoped agent by bare name would
+//     be ambiguous in any multi-rig city. A bare name with no rig
+//     context falls through to findAgent's qualified-or-city-scoped
+//     lookup, which also retains findAgent's V2 BindingName pool-prefix
+//     handling that agentutil.ResolveAgent does not currently implement.
+//
+//   - Unifying CLI and API onto agentutil.ResolveAgent is a follow-up;
+//     doing it safely requires porting findAgent's V2 BindingName logic
+//     into agentutil first. TestApiVsAgentutilResolverParity below
+//     captures the current behavioral contract this resolver guarantees.
 type apiAgentResolver struct{}
 
 func (apiAgentResolver) ResolveAgent(cfg *config.City, name, rigContext string) (config.Agent, bool) {
+	// Step 1: ambient rig match — if the caller supplied a rig context and
+	// the name is bare, prefer the rig-scoped agent.
 	if rigContext != "" && !strings.Contains(name, "/") {
 		if a, ok := findAgent(cfg, rigContext+"/"+name); ok {
 			return a, true
 		}
 	}
+	// Step 2: literal lookup (qualified or city-scoped, plus V2
+	// BindingName pool-member synthesis inside findAgent).
 	return findAgent(cfg, name)
 }
 
-// qualifySlingTarget prepends a rig directory to a bare target when the
-// caller supplied a rig context and the qualified form resolves.
+// qualifySlingTarget prepends a rig directory to a bare-name target
+// when the caller supplies a non-empty rigContext. Returns the target
+// unchanged if already qualified or if the qualified form does not
+// resolve (the caller's final findAgent call will then surface a clean
+// 404). This lets the API carry rig intent via scope_ref (UI path) or
+// body.Rig (dashboard/--rig CLI path) without every caller composing
+// the "<rig>/<name>" string manually.
 func qualifySlingTarget(cfg *config.City, target, rigContext string) string {
 	if rigContext == "" || strings.Contains(target, "/") {
 		return target
@@ -262,9 +294,10 @@ func qualifySlingTarget(cfg *config.City, target, rigContext string) string {
 	return target
 }
 
-// slingRigContext derives the effective rig context for target qualification.
-// scope_ref wins for explicit rig scope; otherwise body.Rig is used for legacy
-// dashboard dispatches that pass --rig without scope metadata.
+// slingRigContext derives the effective rig context for target
+// qualification. scope_ref takes precedence (explicit UI intent); when
+// absent, body.Rig is used as the implicit rig for legacy dashboard
+// dispatches that pass --rig= without scope_kind/scope_ref.
 func slingRigContext(body slingBody) string {
 	if body.ScopeKind == "rig" && body.ScopeRef != "" {
 		return body.ScopeRef

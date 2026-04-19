@@ -172,11 +172,9 @@ func (s *Server) humaHandleOrderHistory(_ context.Context, input *OrderHistoryIn
 
 	var beforeTime time.Time
 	if input.Before != "" {
-		t, err := time.Parse(time.RFC3339, input.Before)
-		if err != nil {
-			return nil, huma.Error400BadRequest("invalid before timestamp: must be RFC3339, got " + strconv.Quote(input.Before))
+		if t, err := time.Parse(time.RFC3339, input.Before); err == nil {
+			beforeTime = t
 		}
-		beforeTime = t
 	}
 
 	aa := s.state.Orders()

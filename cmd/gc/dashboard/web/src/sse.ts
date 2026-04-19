@@ -106,31 +106,11 @@ function isSupervisorEventEnvelope(value: unknown): value is SupervisorEventStre
 
 // --- Stream wrappers -----------------------------------------------
 
-// Reconnection backoff schedule for SSE streams. Exponential with a
-// cap; resets on successful connect. The previous implementation
-// reported "reconnecting" but exited the async IIFE on error, so the
-// stream stayed dead forever — this restores the auto-reconnect
-// behavior the old EventSource code had for free.
-const SSE_RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000] as const;
-const SSE_MAX_BACKOFF_MS = 15000;
-
-function backoffDelayMs(attempt: number): number {
-  if (attempt < SSE_RECONNECT_BACKOFF_MS.length) {
-    return SSE_RECONNECT_BACKOFF_MS[attempt];
-  }
-  return SSE_MAX_BACKOFF_MS;
-}
-
 // connectEvents opens the supervisor-scope events stream
 // (/v0/events/stream). Supervisor stream frames are either
 // `tagged_event` (TaggedEventStreamEnvelope) or `heartbeat`
 // (HeartbeatEvent). Returns an SSEHandle; close() aborts the
 // underlying fetch.
-//
-// The outer loop implements auto-reconnect with exponential backoff.
-// A successful connection (any frame delivered) resets the attempt
-// counter so a connection that lived for hours then dropped retries
-// quickly rather than at the max backoff.
 export function connectEvents(
   onEvent: (msg: DashboardEventMessage) => void,
   opts?: SSEOptions,
@@ -138,66 +118,43 @@ export function connectEvents(
   const controller = new AbortController();
   opts?.onStatus?.("connecting");
   (async () => {
-    let attempt = 0;
-    // errorReported tracks whether we already toasted the user about
-    // the outage. reset to false whenever we receive a frame so the
-    // next failure after a successful connection triggers a new toast
-    // rather than going silent.
-    let errorReported = false;
-    while (!controller.signal.aborted) {
-      try {
-        const { stream } = await streamSupervisorEvents({
-          client,
-          signal: controller.signal,
-          onSseEvent: (frame) => {
-            // Any frame = live connection; reset backoff and the
-            // error-reported flag so the next outage produces exactly
-            // one toast (not one per retry).
-            attempt = 0;
-            errorReported = false;
-            opts?.onStatus?.("live");
-            const eventName = frame.event ?? "tagged_event";
-            if (eventName === "heartbeat") {
-              if (!isHeartbeat(frame.data)) {
-                reportUIError("Invalid supervisor heartbeat frame", frame);
-                return;
-              }
-              onEvent({ event: "heartbeat", id: frame.id, data: frame.data });
+    try {
+      const { stream } = await streamSupervisorEvents({
+        client,
+        signal: controller.signal,
+        onSseEvent: (frame) => {
+          opts?.onStatus?.("live");
+          const eventName = frame.event ?? "tagged_event";
+          if (eventName === "heartbeat") {
+            if (!isHeartbeat(frame.data)) {
+              reportUIError("Invalid supervisor heartbeat frame", frame);
               return;
             }
-            if (eventName === "tagged_event") {
-              if (!isSupervisorEventEnvelope(frame.data)) {
-                reportUIError("Invalid supervisor event frame", frame);
-                return;
-              }
-              onEvent({ event: "tagged_event", id: frame.id, data: frame.data });
+            onEvent({ event: "heartbeat", id: frame.id, data: frame.data });
+            return;
+          }
+          if (eventName === "tagged_event") {
+            if (!isSupervisorEventEnvelope(frame.data)) {
+              reportUIError("Invalid supervisor event frame", frame);
               return;
             }
-            reportUIError(`Unexpected supervisor SSE event: ${eventName}`, frame);
-          },
-        });
-        // Drain the underlying async generator so the reader keeps
-        // pumping frames into onSseEvent. The values it yields are not
-        // used — per-frame dispatch happens in the callback above.
-        for await (const _ of stream) {
-          void _;
-        }
-        // Clean EOF — fall through to reconnect.
-        if (controller.signal.aborted) break;
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        // Toast once per outage, not per retry. The "Reconnecting…"
-        // badge reflects every retry attempt; the toast is just for
-        // the first hit so the user isn't flooded during long outages.
-        if (!errorReported) {
-          reportUIError("Supervisor event stream failed", error);
-          errorReported = true;
-        }
+            onEvent({ event: "tagged_event", id: frame.id, data: frame.data });
+            return;
+          }
+          reportUIError(`Unexpected supervisor SSE event: ${eventName}`, frame);
+        },
+      });
+      // Drain the underlying async generator so the reader keeps
+      // pumping frames into onSseEvent. The values it yields are not
+      // used — per-frame dispatch happens in the callback above.
+      for await (const _ of stream) {
+        void _;
       }
-      opts?.onStatus?.("reconnecting");
-      const delay = backoffDelayMs(attempt);
-      attempt += 1;
-      await sleepAbortable(delay, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        reportUIError("Supervisor event stream failed", error);
+        opts?.onStatus?.("reconnecting");
+      }
     }
   })();
   return { close: () => controller.abort() };
@@ -206,9 +163,6 @@ export function connectEvents(
 // connectCityEvents opens the per-city events stream
 // (/v0/city/{cityName}/events/stream). City stream frames are either
 // `event` (EventStreamEnvelope) or `heartbeat` (HeartbeatEvent).
-//
-// The outer loop implements auto-reconnect with exponential backoff,
-// matching the supervisor stream behavior above.
 export function connectCityEvents(
   city: string,
   onEvent: (msg: DashboardEventMessage) => void,
@@ -217,18 +171,12 @@ export function connectCityEvents(
   const controller = new AbortController();
   opts?.onStatus?.("connecting");
   (async () => {
-    let attempt = 0;
-    // One toast per outage (not per retry). Reset when a frame arrives.
-    let errorReported = false;
-    while (!controller.signal.aborted) {
-      try {
-        const { stream } = await streamEvents({
+    try {
+      const { stream } = await streamEvents({
         client,
         path: { cityName: city },
         signal: controller.signal,
         onSseEvent: (frame) => {
-          attempt = 0;
-          errorReported = false;
           opts?.onStatus?.("live");
           const eventName = frame.event ?? "event";
           const id = frame.id !== undefined ? String(frame.id) : undefined;
@@ -251,41 +199,17 @@ export function connectCityEvents(
           reportUIError(`Unexpected city SSE event: ${eventName}`, frame);
         },
       });
-        for await (const _ of stream) {
-          void _;
-        }
-        if (controller.signal.aborted) break;
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        if (!errorReported) {
-          reportUIError("City event stream failed", error);
-          errorReported = true;
-        }
+      for await (const _ of stream) {
+        void _;
       }
-      opts?.onStatus?.("reconnecting");
-      const delay = backoffDelayMs(attempt);
-      attempt += 1;
-      await sleepAbortable(delay, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        reportUIError("City event stream failed", error);
+        opts?.onStatus?.("reconnecting");
+      }
     }
   })();
   return { close: () => controller.abort() };
-}
-
-// sleepAbortable resolves after ms or when the signal aborts, whichever comes first.
-async function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return;
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort);
-  });
 }
 
 // connectAgentOutput opens the per-session transcript stream

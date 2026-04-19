@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"os/exec"
 	"sync"
@@ -12,29 +11,6 @@ import (
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/sling"
 )
-
-// extmsgNotifyTimeout bounds fire-and-forget goroutines spawned from
-// extmsg inbound/outbound handlers so they cannot leak across server
-// lifetimes or block shutdown on a slow downstream.
-const extmsgNotifyTimeout = 30 * time.Second
-
-// backgroundCtx returns a context that is explicitly detached from the
-// request but has a bounded timeout. Use for fire-and-forget work
-// (extmsg member notification, log-write fanouts) so goroutines cannot
-// outlive reasonable bounds. When the server gains a shutdown ctx in
-// the future, derive from that instead.
-//
-// The returned cancel is intentionally captured inside a goroutine that
-// exits on ctx.Done(), so go vet's lostcancel check stays happy while
-// the timeout still prevents unbounded accumulation.
-func (s *Server) backgroundCtx() context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), extmsgNotifyTimeout)
-	go func() {
-		<-ctx.Done()
-		cancel()
-	}()
-	return ctx
-}
 
 // Server is the per-city handler-host. It owns the per-city State and
 // holds every per-city HTTP handler method (humaHandle*, checkXxxStream,
@@ -137,17 +113,26 @@ func (s *Server) resolveTitleProvider() *config.ResolvedProvider {
 // the typed control plane, so the supervisor's middleware does not run
 // for /svc/* requests).
 func New(state State) *Server {
-	syncFeatureFlags(state.Config())
 	return newServer(state, false)
 }
 
 // NewReadOnly is New with readOnly=true.
 func NewReadOnly(state State) *Server {
-	syncFeatureFlags(state.Config())
 	return newServer(state, true)
 }
 
+func syncFeatureFlags(cfg *config.City) {
+	enabled := cfg != nil && cfg.Daemon.FormulaV2
+	if formula.IsFormulaV2Enabled() != enabled {
+		formula.SetFormulaV2Enabled(enabled)
+	}
+	if molecule.IsGraphApplyEnabled() != enabled {
+		molecule.SetGraphApplyEnabled(enabled)
+	}
+}
+
 func newServer(state State, readOnly bool) *Server {
+	syncFeatureFlags(state.Config())
 	mux := http.NewServeMux()
 	s := &Server{
 		state:    state,
@@ -157,17 +142,4 @@ func newServer(state State, readOnly bool) *Server {
 	}
 	mux.HandleFunc("/svc/", s.handleServiceProxy)
 	return s
-}
-
-// syncFeatureFlags enables/disables graph-formula and graph-apply
-// feature flags based on the city's daemon config. Called from New
-// and NewReadOnly so both modes observe the same flag state.
-func syncFeatureFlags(cfg *config.City) {
-	enabled := cfg != nil && cfg.Daemon.FormulaV2
-	if formula.IsFormulaV2Enabled() != enabled {
-		formula.SetFormulaV2Enabled(enabled)
-	}
-	if molecule.IsGraphApplyEnabled() != enabled {
-		molecule.SetGraphApplyEnabled(enabled)
-	}
 }

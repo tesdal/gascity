@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"net"
-	"strconv"
 	"strings"
 
 	"github.com/gastownhall/gascity/cmd/gc/dashboard"
@@ -119,43 +117,12 @@ func resolveDashboardAPI(cityPath string, cfg *config.City, apiURLOverride strin
 	if cityPath == "" {
 		return "", fmt.Errorf("could not auto-discover the supervisor API; start the supervisor with %q or pass --api explicitly", "gc supervisor start")
 	}
-	// Standalone-controller mode: the controller's API (cfg.API.Port)
-	// now serves the same /v0/city/{cityName}/... surface as the
-	// supervisor via api.NewSupervisorMux, so it is a valid target
-	// for `gc dashboard`. Return the local address when the config
-	// declares a listening port; the dashboard will call ListCities
-	// to discover which city/cities are served.
 	if hasStandaloneDashboardAPI(cfg) {
-		return standaloneAPIBaseURL(cfg), nil
+		return "", fmt.Errorf("dashboard requires the supervisor API; standalone city APIs do not expose /v0/city/{cityName}/... routes. Start the supervisor with %q or pass --api to a supervisor endpoint explicitly", "gc supervisor start")
 	}
 	return "", fmt.Errorf("could not auto-discover the supervisor API for %q; start the supervisor with %q or pass --api explicitly", cityPath, "gc supervisor start")
 }
 
 func hasStandaloneDashboardAPI(cfg *config.City) bool {
 	return cfg != nil && cfg.API.Port > 0
-}
-
-// standaloneAPIBaseURL assembles the local URL of the controller's API.
-// The controller publishes /v0/city/{cityName}/... routes, so the CLI
-// can target it the same way it targets the supervisor.
-//
-// Bind normalization:
-//   - "" → 127.0.0.1 (empty = default in config.API.BindOrDefault edge cases)
-//   - "0.0.0.0" → 127.0.0.1 (listener accepts any v4; connect to loopback)
-//   - "::" → ::1 (listener accepts any v6; connect to loopback)
-//
-// Non-wildcard binds (explicit 127.0.0.1, ::1, 192.168.x.x, 2001::...) are
-// passed through unchanged. net.JoinHostPort wraps IPv6 literals in
-// brackets so the URL parser sees `http://[::1]:8080/...` correctly;
-// plain fmt.Sprintf would produce `http://::1:8080` which parses as
-// host=":" port="1:8080" and fails.
-func standaloneAPIBaseURL(cfg *config.City) string {
-	bind := cfg.API.BindOrDefault()
-	switch bind {
-	case "", "0.0.0.0":
-		bind = "127.0.0.1"
-	case "::":
-		bind = "::1"
-	}
-	return "http://" + net.JoinHostPort(bind, strconv.Itoa(cfg.API.Port))
 }

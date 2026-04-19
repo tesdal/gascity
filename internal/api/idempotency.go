@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-// idempotencyCacheMaxEntries caps the live entry count. Once reached,
-// reserve evicts expired entries first and then the entry with the
-// soonest-expiring deadline. Without this cap a client posting unique
-// Idempotency-Key values grows the cache unbounded between TTL
-// cleanups (ttl/4). The ceiling mirrors responseCacheMaxEntries.
-const idempotencyCacheMaxEntries = 1024
-
 // idempotencyCache stores responses keyed by Idempotency-Key header values.
 // Used on create endpoints so clients can safely retry after network failures.
 //
@@ -68,48 +61,16 @@ func (c *idempotencyCache) reserve(key, bodyHash string) (cachedEntry, bool) {
 		bodyHash:  bodyHash,
 		expiresAt: time.Now().Add(c.ttl),
 	}
-	c.enforceCapLocked()
-	return cachedEntry{}, false
-}
-
-// enforceCapLocked evicts expired entries and, if still over cap,
-// evicts the completed entry with the soonest expiry. Must be called
-// with c.mu held.
-//
-// Pending entries are NEVER evicted. Evicting a pending reservation
-// would let a concurrent retry with the same Idempotency-Key re-execute
-// the create, defeating the whole purpose of the cache. If the cache
-// fills with pending reservations (pathological client behavior), new
-// reserves still proceed — the cap only constrains completed entries.
-func (c *idempotencyCache) enforceCapLocked() {
-	if len(c.entries) <= idempotencyCacheMaxEntries {
-		return
-	}
-	now := time.Now()
-	for k, v := range c.entries {
-		if !v.pending && now.After(v.expiresAt) {
-			delete(c.entries, k)
-		}
-	}
-	// If still over cap, evict the soonest-expiring NON-PENDING entry.
-	// Loop bails out when there are no eligible victims left.
-	for len(c.entries) > idempotencyCacheMaxEntries {
-		var oldestKey string
-		var oldestExpiry time.Time
+	// Lazy cleanup when cache grows large.
+	if len(c.entries) > 1000 {
+		now := time.Now()
 		for k, v := range c.entries {
-			if v.pending {
-				continue
-			}
-			if oldestKey == "" || v.expiresAt.Before(oldestExpiry) {
-				oldestKey = k
-				oldestExpiry = v.expiresAt
+			if now.After(v.expiresAt) {
+				delete(c.entries, k)
 			}
 		}
-		if oldestKey == "" {
-			return
-		}
-		delete(c.entries, oldestKey)
 	}
+	return cachedEntry{}, false
 }
 
 // complete fills in the response for a previously reserved key.

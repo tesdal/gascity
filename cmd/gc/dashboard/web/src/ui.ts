@@ -3,18 +3,6 @@ import { logError } from "./logger";
 
 let pauseCount = 0;
 
-// popPauseListener is wired by main.ts so the dashboard can run a
-// catch-up refresh when the last pause (modal/expanded panel) closes.
-// Without this, events that arrived while paused only marked resources
-// dirty — their renders are deferred until the next event lands, so the
-// UI stays stale after the pause ends.
-type PopPauseListener = () => void;
-let popPauseListener: PopPauseListener | null = null;
-
-export function setPopPauseListener(listener: PopPauseListener | null): void {
-  popPauseListener = listener;
-}
-
 function setPauseCount(next: number): void {
   pauseCount = Math.max(0, next);
   document.body.dataset.pauseRefresh = pauseCount > 0 ? "true" : "false";
@@ -25,15 +13,7 @@ export function pushPause(): void {
 }
 
 export function popPause(): void {
-  const wasPaused = pauseCount > 0;
   setPauseCount(pauseCount - 1);
-  if (wasPaused && pauseCount === 0 && popPauseListener) {
-    try {
-      popPauseListener();
-    } catch (error) {
-      logError("ui", "popPause listener threw", { error: String(error) });
-    }
-  }
 }
 
 export function refreshPaused(): boolean {

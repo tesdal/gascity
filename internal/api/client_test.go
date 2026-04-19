@@ -148,7 +148,7 @@ func TestClientErrorResponse(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewCityScopedClient(ts.URL, "alpha")
+	c := NewClient(ts.URL)
 	err := c.SuspendAgent("nope")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -181,7 +181,7 @@ func TestClientQualifiedAgentName(t *testing.T) {
 
 func TestClientConnError(t *testing.T) {
 	// Client targeting a port with nothing listening → connection refused.
-	c := NewCityScopedClient("http://127.0.0.1:1", "alpha") // port 1 is never listening
+	c := NewClient("http://127.0.0.1:1") // port 1 is never listening
 	err := c.SuspendCity()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -203,7 +203,7 @@ func TestClientAPIErrorNotConnError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewCityScopedClient(ts.URL, "alpha")
+	c := NewClient(ts.URL)
 	err := c.SuspendCity()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -227,7 +227,7 @@ func TestClientReadOnlyFallback(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewCityScopedClient(ts.URL, "alpha")
+	c := NewClient(ts.URL)
 	err := c.SuspendCity()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -241,7 +241,7 @@ func TestClientReadOnlyFallback(t *testing.T) {
 }
 
 func TestClientConnErrorShouldFallback(t *testing.T) {
-	c := NewCityScopedClient("http://127.0.0.1:1", "alpha")
+	c := NewClient("http://127.0.0.1:1")
 	err := c.SuspendCity()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -430,7 +430,7 @@ func TestClientCSRFHeader(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewCityScopedClient(ts.URL, "alpha")
+	c := NewClient(ts.URL)
 	c.SuspendAgent("worker") //nolint:errcheck
 	if gotHeader != "true" {
 		t.Errorf("X-GC-Request = %q, want %q", gotHeader, "true")

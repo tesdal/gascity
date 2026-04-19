@@ -31,12 +31,19 @@ import (
 func TestHumaBinary_SupervisorBootsAndServesSpec(t *testing.T) {
 	bin := buildGCBinary(t)
 
-	gcHome := t.TempDir()
 	// macOS caps AF_UNIX paths at ~104 chars. t.TempDir() paths on
-	// macOS are long enough that <tempdir>/gc/supervisor.sock blows
-	// past the limit. Use a short /tmp-rooted dir for XDG_RUNTIME_DIR
-	// so the socket path stays under the limit.
-	runtimeDir := shortTempDir(t)
+	// macOS are long enough that <tempdir>/supervisor.sock blows past
+	// the limit. An isolated GC_HOME override keeps the supervisor
+	// socket under GC_HOME, so both GC_HOME and XDG_RUNTIME_DIR must
+	// live under the short /tmp-rooted test directory.
+	root := shortTempDir(t)
+	gcHome := filepath.Join(root, "home")
+	runtimeDir := filepath.Join(root, "run")
+	for _, dir := range []string{gcHome, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
 	port := reserveFreePort(t)
 	writeSupervisorConfig(t, gcHome, port)
 

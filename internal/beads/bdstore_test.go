@@ -583,10 +583,11 @@ func TestBdStoreStatusMapping(t *testing.T) {
 	}{
 		{"open", "open"},
 		{"in_progress", "in_progress"},
-		{"blocked", "open"},
-		{"review", "open"},
-		{"testing", "open"},
+		{"blocked", "blocked"},
+		{"review", "review"},
+		{"testing", "testing"},
 		{"closed", "closed"},
+		{"", "open"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.bdStatus, func(t *testing.T) {
@@ -607,6 +608,64 @@ func TestBdStoreStatusMapping(t *testing.T) {
 				t.Errorf("status %q → %q, want %q", tt.bdStatus, b.Status, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestBdStoreUpdatePassesStatusBeforeDottedIDAndVerifies(t *testing.T) {
+	status := "blocked"
+	calls := make([]string, 0, 2)
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		switch call {
+		case `bd update --json --status blocked --set-metadata mc.flag=1 hw-5yc.1`:
+			return []byte(`{"status":"updated"}`), nil
+		case `bd show --json hw-5yc.1`:
+			return []byte(`[{"id":"hw-5yc.1","title":"child","status":"blocked","issue_type":"task","created_at":"2025-01-15T10:30:00Z","metadata":{"mc.flag":"1"}}]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s", call)
+		}
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	err := s.Update("hw-5yc.1", beads.UpdateOpts{
+		Status:   &status,
+		Metadata: map[string]string{"mc.flag": "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{
+		`bd update --json --status blocked --set-metadata mc.flag=1 hw-5yc.1`,
+		`bd show --json hw-5yc.1`,
+	}
+	if strings.Join(calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("calls = %#v, want %#v", calls, wantCalls)
+	}
+}
+
+func TestBdStoreUpdateStatusMismatchReturnsError(t *testing.T) {
+	status := "blocked"
+	runner := fakeRunner(map[string]struct {
+		out []byte
+		err error
+	}{
+		`bd update --json --status blocked hw-5yc.1`: {
+			out: []byte(`{"status":"updated"}`),
+		},
+		`bd show --json hw-5yc.1`: {
+			out: []byte(`[{"id":"hw-5yc.1","title":"child","status":"open","issue_type":"task","created_at":"2025-01-15T10:30:00Z"}]`),
+		},
+	})
+	s := beads.NewBdStore("/city", runner)
+
+	err := s.Update("hw-5yc.1", beads.UpdateOpts{Status: &status})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `status is "open" after setting "blocked"`) {
+		t.Fatalf("error = %q, want status verification failure", err)
 	}
 }
 

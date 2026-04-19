@@ -430,15 +430,11 @@ set -eu
 			got[key] = value
 		}
 	}
-	if got["pwd"] != rigDir {
-		t.Fatalf("pwd = %q, want %q", got["pwd"], rigDir)
-	}
+	assertSameTestPath(t, got["pwd"], rigDir)
 	if got["args"] != "show repo-abc" {
 		t.Fatalf("args = %q, want %q", got["args"], "show repo-abc")
 	}
-	if got["GC_STORE_ROOT"] != rigDir {
-		t.Fatalf("GC_STORE_ROOT = %q, want %q", got["GC_STORE_ROOT"], rigDir)
-	}
+	assertSameTestPath(t, got["GC_STORE_ROOT"], rigDir)
 	if got["GC_STORE_SCOPE"] != "rig" {
 		t.Fatalf("GC_STORE_SCOPE = %q, want %q", got["GC_STORE_SCOPE"], "rig")
 	}
@@ -536,15 +532,11 @@ set -eu
 			got[key] = value
 		}
 	}
-	if got["pwd"] != cityDir {
-		t.Fatalf("pwd = %q, want %q", got["pwd"], cityDir)
-	}
+	assertSameTestPath(t, got["pwd"], cityDir)
 	if got["args"] != "list --label repo-open" {
 		t.Fatalf("args = %q, want %q", got["args"], "list --label repo-open")
 	}
-	if got["GC_STORE_ROOT"] != cityDir {
-		t.Fatalf("GC_STORE_ROOT = %q, want %q", got["GC_STORE_ROOT"], cityDir)
-	}
+	assertSameTestPath(t, got["GC_STORE_ROOT"], cityDir)
 	if got["GC_STORE_SCOPE"] != "city" {
 		t.Fatalf("GC_STORE_SCOPE = %q, want %q", got["GC_STORE_SCOPE"], "city")
 	}
@@ -1262,15 +1254,11 @@ set -eu
 			got[key] = value
 		}
 	}
-	if got["pwd"] != cityDir {
-		t.Fatalf("pwd = %q, want %q", got["pwd"], cityDir)
-	}
+	assertSameTestPath(t, got["pwd"], cityDir)
 	if got["args"] != "context --json" {
 		t.Fatalf("args = %q, want %q", got["args"], "context --json")
 	}
-	if got["GC_STORE_ROOT"] != cityDir {
-		t.Fatalf("GC_STORE_ROOT = %q, want %q", got["GC_STORE_ROOT"], cityDir)
-	}
+	assertSameTestPath(t, got["GC_STORE_ROOT"], cityDir)
 	if got["GC_STORE_SCOPE"] != "city" {
 		t.Fatalf("GC_STORE_SCOPE = %q, want %q", got["GC_STORE_SCOPE"], "city")
 	}
@@ -1344,15 +1332,11 @@ set -eu
 			got[key] = value
 		}
 	}
-	if got["pwd"] != rigDir {
-		t.Fatalf("pwd = %q, want %q", got["pwd"], rigDir)
-	}
+	assertSameTestPath(t, got["pwd"], rigDir)
 	if got["args"] != "context --json" {
 		t.Fatalf("args = %q, want %q", got["args"], "context --json")
 	}
-	if got["GC_STORE_ROOT"] != rigDir {
-		t.Fatalf("GC_STORE_ROOT = %q, want %q", got["GC_STORE_ROOT"], rigDir)
-	}
+	assertSameTestPath(t, got["GC_STORE_ROOT"], rigDir)
 	if got["GC_STORE_SCOPE"] != "rig" {
 		t.Fatalf("GC_STORE_SCOPE = %q, want %q", got["GC_STORE_SCOPE"], "rig")
 	}

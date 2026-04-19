@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -75,22 +74,16 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 
 		providers := s.state.MailProviders()
 		var allMsgs []mail.Message
-		var partialErrs []string
 		for _, name := range sortedProviderNames(providers) {
 			msgs, err := mailInboxForRecipients(providers[name], agents)
 			if err != nil {
-				partialErrs = append(partialErrs, "mail provider "+name+": "+err.Error())
-				continue
+				return nil, huma.Error500InternalServerError("mail provider " + name + ": " + err.Error())
 			}
 			allMsgs = append(allMsgs, tagRig(msgs, name)...)
-		}
-		if len(partialErrs) == len(providers) && len(providers) > 0 {
-			return nil, huma.Error503ServiceUnavailable("all mail providers failed: " + strings.Join(partialErrs, "; "))
 		}
 		if allMsgs == nil {
 			allMsgs = []mail.Message{}
 		}
-		partial := len(partialErrs) > 0
 		if !pp.IsPaging {
 			total := len(allMsgs)
 			if pp.Limit < len(allMsgs) {
@@ -98,7 +91,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 			}
 			return &MailListOutput{
 				Index: index,
-				Body:  MailListBody{Items: allMsgs, Total: total, Partial: partial, PartialErrors: partialErrs},
+				Body:  MailListBody{Items: allMsgs, Total: total},
 			}, nil
 		}
 		page, total, nextCursor := paginate(allMsgs, pp)
@@ -107,7 +100,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 		}
 		return &MailListOutput{
 			Index: index,
-			Body:  MailListBody{Items: page, Total: total, NextCursor: nextCursor, Partial: partial, PartialErrors: partialErrs},
+			Body:  MailListBody{Items: page, Total: total, NextCursor: nextCursor},
 		}, nil
 
 	case "all":
@@ -149,22 +142,16 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 
 		providers := s.state.MailProviders()
 		var allMsgs []mail.Message
-		var partialErrs []string
 		for _, name := range sortedProviderNames(providers) {
 			msgs, err := mailAllForRecipients(providers[name], agents)
 			if err != nil {
-				partialErrs = append(partialErrs, "mail provider "+name+": "+err.Error())
-				continue
+				return nil, huma.Error500InternalServerError("mail provider " + name + ": " + err.Error())
 			}
 			allMsgs = append(allMsgs, tagRig(msgs, name)...)
-		}
-		if len(partialErrs) == len(providers) && len(providers) > 0 {
-			return nil, huma.Error503ServiceUnavailable("all mail providers failed: " + strings.Join(partialErrs, "; "))
 		}
 		if allMsgs == nil {
 			allMsgs = []mail.Message{}
 		}
-		partial := len(partialErrs) > 0
 		if !pp.IsPaging {
 			total := len(allMsgs)
 			if pp.Limit < len(allMsgs) {
@@ -172,7 +159,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 			}
 			return &MailListOutput{
 				Index: index,
-				Body:  MailListBody{Items: allMsgs, Total: total, Partial: partial, PartialErrors: partialErrs},
+				Body:  MailListBody{Items: allMsgs, Total: total},
 			}, nil
 		}
 		page, total, nextCursor := paginate(allMsgs, pp)
@@ -181,7 +168,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 		}
 		return &MailListOutput{
 			Index: index,
-			Body:  MailListBody{Items: page, Total: total, NextCursor: nextCursor, Partial: partial, PartialErrors: partialErrs},
+			Body:  MailListBody{Items: page, Total: total, NextCursor: nextCursor},
 		}, nil
 
 	default:
@@ -295,28 +282,19 @@ func (s *Server) humaHandleMailCount(ctx context.Context, input *MailCountInput)
 	}
 
 	// Aggregate across all rigs (deduplicated by provider identity).
-	// Fail-open: one bad provider turns into partial_errors, 503 only
-	// when every provider fails — matches humaHandleMailList.
 	providers := s.state.MailProviders()
 	var totalAll, unreadAll int
-	var partialErrs []string
 	for _, name := range sortedProviderNames(providers) {
 		total, unread, err := mailCountForRecipients(providers[name], agents)
 		if err != nil {
-			partialErrs = append(partialErrs, "mail provider "+name+": "+err.Error())
-			continue
+			return nil, huma.Error500InternalServerError("mail provider " + name + ": " + err.Error())
 		}
 		totalAll += total
 		unreadAll += unread
 	}
-	if len(partialErrs) == len(providers) && len(providers) > 0 {
-		return nil, huma.Error503ServiceUnavailable("all mail providers failed: " + strings.Join(partialErrs, "; "))
-	}
 	resp := &MailCountOutput{}
 	resp.Body.Total = totalAll
 	resp.Body.Unread = unreadAll
-	resp.Body.Partial = len(partialErrs) > 0
-	resp.Body.PartialErrors = partialErrs
 	return resp, nil
 }
 
@@ -346,28 +324,21 @@ func (s *Server) humaHandleMailThread(_ context.Context, input *MailThreadInput)
 	}
 
 	// Aggregate thread messages across all providers.
-	// Fail-open: one bad provider returns partial+errors, 503 only when
-	// every provider fails — matches humaHandleMailList.
 	providers := s.state.MailProviders()
 	var allMsgs []mail.Message
-	var partialErrs []string
 	for _, name := range sortedProviderNames(providers) {
 		msgs, err := providers[name].Thread(threadID)
 		if err != nil {
-			partialErrs = append(partialErrs, "mail provider "+name+": "+err.Error())
-			continue
+			return nil, huma.Error500InternalServerError("mail provider " + name + ": " + err.Error())
 		}
 		allMsgs = append(allMsgs, tagRig(msgs, name)...)
-	}
-	if len(partialErrs) == len(providers) && len(providers) > 0 {
-		return nil, huma.Error503ServiceUnavailable("all mail providers failed: " + strings.Join(partialErrs, "; "))
 	}
 	if allMsgs == nil {
 		allMsgs = []mail.Message{}
 	}
 	return &MailListOutput{
 		Index: index,
-		Body:  MailListBody{Items: allMsgs, Total: len(allMsgs), Partial: len(partialErrs) > 0, PartialErrors: partialErrs},
+		Body:  MailListBody{Items: allMsgs, Total: len(allMsgs)},
 	}, nil
 }
 

@@ -347,9 +347,9 @@ mechanism.
 ```
 
 **Status mapping.** The bd CLI uses six statuses (open, in_progress,
-blocked, review, testing, closed). `mapBdStatus()` in
-`internal/beads/bdstore.go` collapses these to Gas City's three: closed
-maps to closed, in_progress maps to in_progress, everything else to open.
+blocked, review, testing, closed). Gas City preserves those non-empty
+status values at the API boundary so clients can round-trip bd semantics.
+An empty status from a backend is normalized to the store default, open.
 
 ## Code Map
 

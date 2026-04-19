@@ -33,6 +33,39 @@ func TestWorkflowEventScope(t *testing.T) {
 	}
 }
 
+func TestToWireEventIncludesUnregisteredPayloadlessEvent(t *testing.T) {
+	wire, ok := toWireEvent(events.Event{
+		Type:    "test.custom",
+		Seq:     7,
+		Ts:      time.Unix(1711300000, 0).UTC(),
+		Actor:   "tester",
+		Subject: "subject",
+		Message: "message",
+	})
+	if !ok {
+		t.Fatal("toWireEvent returned ok=false, want true")
+	}
+	if wire.Type != "test.custom" {
+		t.Fatalf("Type = %q, want test.custom", wire.Type)
+	}
+	if _, ok := wire.Payload.Value.(events.NoPayload); !ok {
+		t.Fatalf("Payload = %T, want events.NoPayload", wire.Payload.Value)
+	}
+}
+
+func TestToWireEventDropsUnregisteredOpaquePayload(t *testing.T) {
+	_, ok := toWireEvent(events.Event{
+		Type:    "test.custom",
+		Seq:     7,
+		Ts:      time.Unix(1711300000, 0).UTC(),
+		Actor:   "tester",
+		Payload: json.RawMessage(`{"opaque":true}`),
+	})
+	if ok {
+		t.Fatal("toWireEvent returned ok=true, want false")
+	}
+}
+
 func TestProjectWorkflowEventUsesRootStoreRefHint(t *testing.T) {
 	state := newFakeState(t)
 	state.cityName = "gascity"

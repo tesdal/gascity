@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -624,18 +623,17 @@ metadata = { "gc.kind" = "run", "gc.scope_ref" = "body" }
 	}
 }
 
-// TestFormulaDetailRejectsLegacyVarQueryParams pins the §3.5.1 migration
-// behavior: undeclared var.* query parameters on the GET detail endpoint
-// are now rejected with a 4xx + migration hint pointing at POST /preview.
-// Silent-ignore was worse than either accept-or-reject because bookmarked
-// curl scripts rendered the default-substituted preview the user thought
-// was customized.
-func TestFormulaDetailRejectsLegacyVarQueryParams(t *testing.T) {
+// TestFormulaDetailIgnoresDynamicVarQueryParams pins the §3.5.1
+// invariant: undeclared var.* query parameters on the GET detail
+// endpoint are noise, not input. Callers supply variables through
+// the typed POST /preview body instead.
+func TestFormulaDetailIgnoresDynamicVarQueryParams(t *testing.T) {
 	prev := formula.IsFormulaV2Enabled()
 	formula.SetFormulaV2Enabled(true)
 	t.Cleanup(func() { formula.SetFormulaV2Enabled(prev) })
 
 	state := newFakeState(t)
+	state.cfg.Daemon.FormulaV2 = true
 	formulaDir := t.TempDir()
 	state.cfg.FormulaLayers.City = []string{formulaDir}
 
@@ -659,11 +657,16 @@ title = "Prep {{issue}}"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if rec.Code < 400 || rec.Code >= 500 {
-		t.Fatalf("status = %d, want 4xx rejecting var.* params: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "var.") {
-		t.Fatalf("response body does not mention var.* migration: %s", rec.Body.String())
+
+	var detail formulaDetailResponse
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("Decode(detail): %v", err)
+	}
+	if detail.Description != "Preview DEFAULT" {
+		t.Fatalf("description = %q, want default substitution (var.* query params must be ignored)", detail.Description)
 	}
 }
 

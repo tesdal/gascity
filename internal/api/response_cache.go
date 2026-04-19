@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -178,27 +177,14 @@ func (s *Server) evictResponseCache(now time.Time) {
 }
 
 // cachedResponseAs is a generic helper: retrieve the cached value and
-// deep-copy it via a JSON roundtrip before returning.
-//
-// The JSON roundtrip isolates concurrent readers: if a handler mutates
-// the returned struct's slices/maps (e.g. appends a partial-error note
-// before serialization), other readers of the same cache entry see the
-// clean value. The cost is one Marshal + Unmarshal per cache hit, but
-// Huma would re-serialize the value on output anyway so the net is ~1
-// extra Unmarshal call on the read path.
+// type-assert to T in one call. Returns the zero value of T if absent or
+// type-asserted fails (shouldn't happen if producers match consumers).
 func cachedResponseAs[T any](s *Server, key string, index uint64) (T, bool) {
 	var zero T
-	v, ok := s.cachedResponse(key, index)
-	if !ok {
-		return zero, false
+	if v, ok := s.cachedResponse(key, index); ok {
+		if t, ok := v.(T); ok {
+			return t, true
+		}
 	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return zero, false
-	}
-	var result T
-	if err := json.Unmarshal(data, &result); err != nil {
-		return zero, false
-	}
-	return result, true
+	return zero, false
 }

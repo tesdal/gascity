@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -16,6 +17,18 @@ type SlingOutput struct {
 	Body   slingResponse
 }
 
+func (e *SlingConflictResponse) Error() string {
+	if e == nil {
+		return "source workflow conflict"
+	}
+	return e.Message
+}
+
+// GetStatus tells Huma to serialize sling source-workflow conflicts as HTTP 409.
+func (e *SlingConflictResponse) GetStatus() int {
+	return http.StatusConflict
+}
+
 // humaHandleSling is the Huma-typed handler for POST /v0/sling.
 func (s *Server) humaHandleSling(ctx context.Context, input *SlingInput) (*SlingOutput, error) {
 	body := slingBody{
@@ -28,6 +41,7 @@ func (s *Server) humaHandleSling(ctx context.Context, input *SlingInput) (*Sling
 		Vars:           input.Body.Vars,
 		ScopeKind:      input.Body.ScopeKind,
 		ScopeRef:       input.Body.ScopeRef,
+		Force:          input.Body.Force,
 	}
 
 	if body.Target == "" {
@@ -38,6 +52,7 @@ func (s *Server) humaHandleSling(ctx context.Context, input *SlingInput) (*Sling
 	body.ScopeRef = strings.TrimSpace(body.ScopeRef)
 
 	cfg := s.state.Config()
+	syncFeatureFlags(cfg)
 	body.Target = qualifySlingTarget(cfg, body.Target, slingRigContext(body))
 	agentCfg, ok := findAgent(cfg, body.Target)
 	if !ok {
@@ -89,10 +104,30 @@ func (s *Server) humaHandleSling(ctx context.Context, input *SlingInput) (*Sling
 		}
 	}
 
-	resp, status, code, message := s.execSling(ctx, body, agentCfg.EffectiveDefaultSlingFormula())
+	resp, status, code, message, conflict := s.execSlingDirect(ctx, body, agentCfg)
 	if code != "" {
+		if conflict != nil {
+			blockingIDs := append([]string(nil), conflict.WorkflowIDs...)
+			if blockingIDs == nil {
+				blockingIDs = []string{}
+			}
+			return nil, &SlingConflictResponse{
+				Code:                code,
+				Message:             message,
+				SourceBeadID:        conflict.SourceBeadID,
+				BlockingWorkflowIDs: blockingIDs,
+				Hint: fmt.Sprintf("use --force to override, or %s to clean up",
+					sourceWorkflowCleanupHint(conflict.SourceBeadID, s.slingStoreRef(body.Rig, agentCfg))),
+			}
+		}
 		if status == http.StatusNotFound {
 			return nil, huma.Error404NotFound(message)
+		}
+		if status == http.StatusConflict {
+			return nil, huma.Error409Conflict(message)
+		}
+		if status >= http.StatusInternalServerError {
+			return nil, huma.Error500InternalServerError(message)
 		}
 		return nil, huma.Error400BadRequest(message)
 	}

@@ -353,6 +353,50 @@ func TestBeadCRUD(t *testing.T) {
 	}
 }
 
+func TestBeadCreateParentAndMetadata(t *testing.T) {
+	state := newFakeState(t)
+	store := state.stores["myrig"]
+	parent, err := store.Create(beads.Bead{Title: "Parent"})
+	if err != nil {
+		t.Fatalf("Create(parent): %v", err)
+	}
+	h := newTestCityHandler(t, state)
+
+	body := `{"rig":"myrig","title":"Child","parent":"` + parent.ID + `","metadata":{"mc_kind":"request","empty_marker":""}}`
+	req := newPostRequest(cityURL(state, "/beads"), bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var created beads.Bead
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("Decode(): %v", err)
+	}
+	if created.ParentID != parent.ID {
+		t.Fatalf("ParentID = %q, want %q", created.ParentID, parent.ID)
+	}
+	if created.Metadata["mc_kind"] != "request" {
+		t.Fatalf("Metadata[mc_kind] = %q, want request", created.Metadata["mc_kind"])
+	}
+	if value, ok := created.Metadata["empty_marker"]; !ok || value != "" {
+		t.Fatalf("Metadata[empty_marker] = %q, %v; want empty string present", value, ok)
+	}
+
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get(created): %v", err)
+	}
+	if got.ParentID != parent.ID {
+		t.Fatalf("stored ParentID = %q, want %q", got.ParentID, parent.ID)
+	}
+	if got.Metadata["mc_kind"] != "request" {
+		t.Fatalf("stored Metadata[mc_kind] = %q, want request", got.Metadata["mc_kind"])
+	}
+}
+
 func TestBeadListFiltering(t *testing.T) {
 	state := newFakeState(t)
 	store := state.stores["myrig"]
@@ -498,6 +542,51 @@ func TestBeadUpdate(t *testing.T) {
 	}
 	if len(got.Labels) != 1 || got.Labels[0] != "new-label" {
 		t.Errorf("Labels = %v, want [new-label]", got.Labels)
+	}
+}
+
+func TestBeadUpdateParentSetAndClear(t *testing.T) {
+	state := newFakeState(t)
+	store := state.stores["myrig"]
+	parent, err := store.Create(beads.Bead{Title: "Parent"})
+	if err != nil {
+		t.Fatalf("Create(parent): %v", err)
+	}
+	child, err := store.Create(beads.Bead{Title: "Child"})
+	if err != nil {
+		t.Fatalf("Create(child): %v", err)
+	}
+	h := newTestCityHandler(t, state)
+
+	body := `{"parent":"` + parent.ID + `"}`
+	req := newPostRequest(cityURL(state, "/bead/")+child.ID+"/update", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set parent status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got, err := store.Get(child.ID)
+	if err != nil {
+		t.Fatalf("Get(child after set): %v", err)
+	}
+	if got.ParentID != parent.ID {
+		t.Fatalf("ParentID after set = %q, want %q", got.ParentID, parent.ID)
+	}
+
+	req = newPostRequest(cityURL(state, "/bead/")+child.ID+"/update", bytes.NewBufferString(`{"parent":""}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear parent status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got, err = store.Get(child.ID)
+	if err != nil {
+		t.Fatalf("Get(child after clear): %v", err)
+	}
+	if got.ParentID != "" {
+		t.Fatalf("ParentID after clear = %q, want empty", got.ParentID)
 	}
 }
 
@@ -651,15 +740,14 @@ func TestBeadUpdatePriority(t *testing.T) {
 	}
 }
 
-// TestBeadUpdateNullPriorityRejected asserts that `priority: null` is
-// rejected with a 4xx + migration-friendly error message, not silently
-// ignored. An earlier revision removed the explicit null-vs-absent
-// detection so clients that said "clear priority" via null got a 200
-// with priority unchanged — a silent semantic shift. The rejection was
-// reinstated via a custom UnmarshalJSON on beadUpdateBody. Clients that
-// want to clear priority must use a dedicated endpoint (not exposed yet);
-// callers who previously sent null by accident now see a clear error.
-func TestBeadUpdateNullPriorityRejected(t *testing.T) {
+// TestBeadUpdateNullPriorityIsNoOp documents the post-Phase-3 behavior:
+// `priority: null` is treated identically to "priority absent" — the
+// underlying store keeps the existing priority unchanged. The earlier
+// 400 "clearing priority is not supported" rejection was removed
+// alongside the json.RawMessage body that made null-vs-absent
+// detection possible. The dashboard (only in-repo caller) never sends
+// null, so the UX nicety wasn't load-bearing.
+func TestBeadUpdateNullPriorityIsNoOp(t *testing.T) {
 	state := newFakeState(t)
 	store := state.stores["myrig"]
 	priority := 1
@@ -671,13 +759,13 @@ func TestBeadUpdateNullPriorityRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if rec.Code < 400 || rec.Code >= 500 {
-		t.Fatalf("update status = %d, want 4xx rejecting null priority: body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	got, _ := store.Get(b.ID)
 	if got.Priority == nil || *got.Priority != 1 {
-		t.Fatalf("Priority = %v, want unchanged 1 (existing value preserved after 4xx)", got.Priority)
+		t.Fatalf("Priority = %v, want unchanged 1", got.Priority)
 	}
 }
 

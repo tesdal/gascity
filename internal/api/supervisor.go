@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/gastownhall/gascity/internal/cityinit"
 	"github.com/gastownhall/gascity/internal/events"
 )
 
@@ -31,6 +32,19 @@ type CityResolver interface {
 	ListCities() []CityInfo
 	// CityState returns the State for a named city, or nil if not found/not running.
 	CityState(name string) State
+}
+
+// FailedCityEventSource is an optional CityResolver extension that
+// lets the supervisor-scope event multiplexer include event providers
+// for cities whose init failed (so subscribers of /v0/events/stream
+// can observe city.init_failed events without polling). Resolvers
+// that implement this return one entry per failed city; the key is
+// the city name, the value is an event provider backed by that
+// city's .gc/events.jsonl file. Failed cities are not in
+// ListCities's Running set so the existing multiplexer loop skips
+// them; this method reintroduces them for event-stream purposes only.
+type FailedCityEventSource interface {
+	FailedCityEventProviders() map[string]events.Provider
 }
 
 // cachedCityServer pairs a State with its pre-built Server for caching.
@@ -53,11 +67,12 @@ type cachedCityServer struct {
 // to per-city Server.mux. Workspace services own their own HTTP
 // contracts and are explicitly excluded from the typed control plane.
 type SupervisorMux struct {
-	resolver  CityResolver
-	readOnly  bool
-	version   string
-	startedAt time.Time
-	server    *http.Server
+	resolver    CityResolver
+	initializer cityinit.Initializer
+	readOnly    bool
+	version     string
+	startedAt   time.Time
+	server      *http.Server
 
 	// Single Huma API (Phase 3.5 — Topology 1). Owns every typed
 	// operation: supervisor-scope (/v0/cities, /health, /v0/readiness,
@@ -76,20 +91,29 @@ type SupervisorMux struct {
 }
 
 // NewSupervisorMux creates a SupervisorMux that routes requests to cities
-// resolved by the given CityResolver.
-func NewSupervisorMux(resolver CityResolver, readOnly bool, version string, startedAt time.Time) *SupervisorMux {
+// resolved by the given CityResolver. The initializer is invoked by the
+// POST /v0/city handler to scaffold new cities in-process; passing nil
+// is allowed for tests that don't exercise city creation (the handler
+// returns 501 Not Implemented in that case).
+func NewSupervisorMux(resolver CityResolver, initializer cityinit.Initializer, readOnly bool, version string, startedAt time.Time) *SupervisorMux {
 	humaMux := http.NewServeMux()
 	sm := &SupervisorMux{
-		resolver:  resolver,
-		readOnly:  readOnly,
-		version:   version,
-		startedAt: startedAt,
-		humaMux:   humaMux,
-		humaAPI:   newSupervisorHumaAPI(humaMux, readOnly),
-		cache:     make(map[string]cachedCityServer),
+		resolver:    resolver,
+		initializer: initializer,
+		readOnly:    readOnly,
+		version:     version,
+		startedAt:   startedAt,
+		humaMux:     humaMux,
+		humaAPI:     newSupervisorHumaAPI(humaMux, readOnly),
+		cache:       make(map[string]cachedCityServer),
 	}
 	sm.registerSupervisorRoutes()
 	sm.registerCityRoutes()
+	// Declare framework-level response headers (X-GC-Request-Id) via
+	// components.headers + $ref on every operation. Middleware writes
+	// the header at runtime; the spec describes the contract. Must run
+	// after all routes are registered.
+	registerFrameworkHeaders(sm.humaAPI)
 	// /svc/* workspace-service pass-through. This is the single remaining
 	// non-Huma registration on the supervisor — untyped by design (the
 	// proxy passes bodies through to external service processes, which
@@ -238,7 +262,12 @@ func (sm *SupervisorMux) getCityServer(name string, state State) *Server {
 }
 
 // buildMultiplexer creates a Multiplexer from all running cities'
-// event providers.
+// event providers plus any failed-city providers surfaced by a
+// resolver that implements FailedCityEventSource. Including failed
+// cities matters for clients that call POST /v0/city and wait for
+// a city.init_failed event on /v0/events/stream — without it, the
+// event would be written to the city's events.jsonl but never reach
+// supervisor-scope subscribers.
 func (sm *SupervisorMux) buildMultiplexer() *events.Multiplexer {
 	mux := events.NewMultiplexer()
 	cities := sm.resolver.ListCities()
@@ -255,6 +284,14 @@ func (sm *SupervisorMux) buildMultiplexer() *events.Multiplexer {
 			continue
 		}
 		mux.Add(c.Name, ep)
+	}
+	if failed, ok := sm.resolver.(FailedCityEventSource); ok {
+		for name, ep := range failed.FailedCityEventProviders() {
+			if ep == nil {
+				continue
+			}
+			mux.Add(name, ep)
+		}
 	}
 	return mux
 }

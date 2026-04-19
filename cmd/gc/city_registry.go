@@ -1,12 +1,14 @@
 package main
 
 import (
+	"io"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/events"
 )
 
 // cityView is a read-only projection of managedCity, built at snapshot time.
@@ -170,6 +172,38 @@ func (r *cityRegistry) BatchUpdate(fn func(
 // Snapshot returns the current read-only snapshot. Lock-free.
 func (r *cityRegistry) Snapshot() *citySnapshot {
 	return r.snap.Load()
+}
+
+// FailedCityEventProviders implements api.FailedCityEventSource so
+// the supervisor-scope event multiplexer can surface city.init_failed
+// events to /v0/events/stream subscribers. Opens each failed city's
+// .gc/events.jsonl file read-only; the consumer is expected to close
+// via the provider's lifecycle. Best-effort: cities whose event file
+// is missing or unreadable are simply skipped.
+func (r *cityRegistry) FailedCityEventProviders() map[string]events.Provider {
+	r.citiesMu.Lock()
+	paths := make(map[string]string, len(r.initFailures))
+	snap := r.snap.Load()
+	for path := range r.initFailures {
+		if v, ok := snap.byPath[path]; ok && v.Name != "" {
+			paths[v.Name] = path
+			continue
+		}
+		// Fall back to basename if we don't have a resolved name yet.
+		paths[filepath.Base(path)] = path
+	}
+	r.citiesMu.Unlock()
+
+	out := make(map[string]events.Provider, len(paths))
+	for name, path := range paths {
+		evPath := filepath.Join(path, ".gc", "events.jsonl")
+		fr, err := events.NewFileRecorder(evPath, io.Discard)
+		if err != nil {
+			continue
+		}
+		out[name] = fr
+	}
+	return out
 }
 
 // CityState returns the api.State for a named city, or nil if not found/not running.

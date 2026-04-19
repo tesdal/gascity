@@ -67,14 +67,14 @@ type WireTaggedEvent struct {
 
 // toWireEvent decodes the bus's opaque Payload into the registered
 // typed variant and returns the list-endpoint wire shape. On decode
-// failure or unregistered event type it returns (WireEvent{}, false)
-// so the caller can omit the event from the list — the spec's §4
-// uniform decode-failure policy: skip + log, never emit a degraded
-// envelope with nil payload. The registry-coverage test
-// (TestEveryKnownEventTypeHasRegisteredPayload) makes both failure
-// paths unreachable for any KnownEventTypes constant (Principle 7);
-// the log is for bus corruption and unregistered custom types so
-// operators can investigate.
+// failure it returns (WireEvent{}, false) so the caller can omit the
+// event from the list — the spec's §4 uniform decode-failure policy:
+// skip + log, never emit a degraded envelope with nil payload. The
+// registry-coverage test (TestEveryKnownEventTypeHasRegisteredPayload)
+// makes both failure paths unreachable for any KnownEventTypes constant
+// (Principle 7). Unregistered custom events are allowed only when they
+// carry no opaque payload; their semantics live in the envelope fields
+// and they are represented with the typed empty NoPayload variant.
 func toWireEvent(e events.Event) (WireEvent, bool) {
 	decoded, registered, err := events.DecodePayload(e.Type, e.Payload)
 	if err != nil {
@@ -82,8 +82,11 @@ func toWireEvent(e events.Event) (WireEvent, bool) {
 		return WireEvent{}, false
 	}
 	if !registered {
-		log.Printf("api: events wire: unregistered event type %q seq=%d (add to events.KnownEventTypes and register a payload)", e.Type, e.Seq)
-		return WireEvent{}, false
+		if len(e.Payload) != 0 {
+			log.Printf("api: events wire: unregistered event type %q seq=%d has opaque payload (add to events.KnownEventTypes and register a payload)", e.Type, e.Seq)
+			return WireEvent{}, false
+		}
+		decoded = events.NoPayload{}
 	}
 	payload, _ := decoded.(events.Payload)
 	return WireEvent{

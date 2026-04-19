@@ -2104,9 +2104,7 @@ func TestResolveRigAddPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveRigAddPath(relative): %v", err)
 	}
-	if want := filepath.Join(cityPath, "frontend"); got != want {
-		t.Fatalf("resolveRigAddPath(relative) = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, filepath.Join(cityPath, "frontend"))
 
 	wd := t.TempDir()
 	setCwd(t, wd)
@@ -2114,18 +2112,14 @@ func TestResolveRigAddPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveRigAddPath(dot): %v", err)
 	}
-	if want := wd; got != want {
-		t.Fatalf("resolveRigAddPath(dot) = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, wd)
 
 	abs := filepath.Join(t.TempDir(), "repo")
 	got, err = resolveRigAddPath(cityPath, abs)
 	if err != nil {
 		t.Fatalf("resolveRigAddPath(abs): %v", err)
 	}
-	if got != abs {
-		t.Fatalf("resolveRigAddPath(abs) = %q, want %q", got, abs)
-	}
+	assertSameTestPath(t, got, abs)
 }
 
 func TestCmdRigAddStoresMachinePathInSiteBindingWhenOutsideCity(t *testing.T) {

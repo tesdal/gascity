@@ -708,12 +708,8 @@ prefix = "fe"
 	if len(lines) != 6 {
 		t.Fatalf("exec env lines = %d, want 6 (%q)", len(lines), string(data))
 	}
-	if lines[0] != rigDir {
-		t.Fatalf("pwd = %q, want %q", lines[0], rigDir)
-	}
-	if lines[1] != rigDir {
-		t.Fatalf("GC_STORE_ROOT = %q, want %q", lines[1], rigDir)
-	}
+	assertSameTestPath(t, lines[0], rigDir)
+	assertSameTestPath(t, lines[1], rigDir)
 	if lines[2] != "rig" {
 		t.Fatalf("GC_STORE_SCOPE = %q, want rig", lines[2])
 	}

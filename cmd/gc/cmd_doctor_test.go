@@ -195,18 +195,22 @@ prefix = "fe"
 	if len(rigs) != 1 {
 		t.Fatalf("len(rigs) = %d, want 1", len(rigs))
 	}
-	if rigs[0].Path != rigDir {
-		t.Fatalf("rig path = %q, want %q", rigs[0].Path, rigDir)
-	}
-	if rigs[0].DefaultCity != cityDir {
-		t.Fatalf("default city = %q, want %q", rigs[0].DefaultCity, cityDir)
-	}
+	assertSameTestPath(t, rigs[0].Path, rigDir)
+	assertSameTestPath(t, rigs[0].DefaultCity, cityDir)
 	envData, err := os.ReadFile(filepath.Join(rigDir, ".beads", ".env"))
 	if err != nil {
 		t.Fatalf("ReadFile(.env): %v", err)
 	}
-	if got := string(envData); !strings.Contains(got, "GT_ROOT="+cityDir+"\n") {
-		t.Fatalf(".env = %q, want GT_ROOT", got)
+	foundGT := false
+	for _, line := range strings.Split(strings.TrimSpace(string(envData)), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok && key == "GT_ROOT" {
+			foundGT = true
+			assertSameTestPath(t, value, cityDir)
+		}
+	}
+	if !foundGT {
+		t.Fatalf(".env = %q, want GT_ROOT", string(envData))
 	}
 }
 

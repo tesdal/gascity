@@ -369,18 +369,13 @@ func isBdNotFound(err error) bool {
 	return strings.Contains(msg, "not found") || strings.Contains(msg, "no issue found")
 }
 
-// mapBdStatus maps bd's statuses to Gas City's 3. bd uses: open,
-// in_progress, blocked, review, testing, closed. Gas City uses:
-// open, in_progress, closed.
+// mapBdStatus normalizes empty status values from bd to the store default.
+// Non-empty bd status values are part of the API surface and must round-trip.
 func mapBdStatus(s string) string {
-	switch s {
-	case "closed":
-		return "closed"
-	case "in_progress":
-		return "in_progress"
-	default:
+	if s == "" {
 		return "open"
 	}
+	return s
 }
 
 // Create persists a new bead via bd create.
@@ -469,27 +464,35 @@ func (s *BdStore) Get(id string) (Bead, error) {
 
 // Update modifies fields of an existing bead via bd update.
 func (s *BdStore) Update(id string, opts UpdateOpts) error {
-	args := []string{"update", "--json", id}
+	args := []string{"update", "--json"}
+	changed := false
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
+		changed = true
 	}
 	if opts.Status != nil {
 		args = append(args, "--status", *opts.Status)
+		changed = true
 	}
 	if opts.Type != nil {
 		args = append(args, "--type", *opts.Type)
+		changed = true
 	}
 	if opts.Priority != nil {
 		args = append(args, "--priority", strconv.Itoa(*opts.Priority))
+		changed = true
 	}
 	if opts.Description != nil {
 		args = append(args, "--description", *opts.Description)
+		changed = true
 	}
 	if opts.ParentID != nil {
 		args = append(args, "--parent", *opts.ParentID)
+		changed = true
 	}
 	if opts.Assignee != nil {
 		args = append(args, "--assignee", *opts.Assignee)
+		changed = true
 	}
 	if len(opts.Metadata) > 0 {
 		keys := make([]string, 0, len(opts.Metadata))
@@ -500,23 +503,46 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 		for _, k := range keys {
 			args = append(args, "--set-metadata", k+"="+opts.Metadata[k])
 		}
+		changed = true
 	}
 	for _, l := range opts.Labels {
 		args = append(args, "--add-label", l)
+		changed = true
 	}
 	for _, l := range opts.RemoveLabels {
 		args = append(args, "--remove-label", l)
+		changed = true
 	}
 	// No fields to update — no-op (bd errors on empty update).
-	if len(args) == 3 {
+	if !changed {
 		return nil
 	}
+	args = append(args, id)
 	_, err := s.runner(s.dir, "bd", args...)
 	if err != nil {
 		if isBdNotFound(err) {
 			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
 		}
 		return fmt.Errorf("updating bead %q: %w", id, err)
+	}
+	if opts.Status != nil {
+		if err := s.verifyStatus(id, *opts.Status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *BdStore) verifyStatus(id, want string) error {
+	got, err := s.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("updating bead %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("updating bead %q: verifying status: %w", id, err)
+	}
+	if got.Status != want {
+		return fmt.Errorf("updating bead %q: status is %q after setting %q", id, got.Status, want)
 	}
 	return nil
 }

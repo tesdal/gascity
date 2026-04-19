@@ -49,35 +49,16 @@ type readOnlyError struct {
 
 func (e *readOnlyError) Error() string { return e.msg }
 
-// clientInitError indicates the client failed to construct its generated
-// transport (typically a malformed base URL). It is treated as a fallback
-// condition so CLI ladders can fall through to direct file mutation.
-type clientInitError struct {
-	err error
-}
-
-func (e *clientInitError) Error() string {
-	if e.err == nil {
-		return "api: client not initialized"
-	}
-	return "api: client not initialized: " + e.err.Error()
-}
-func (e *clientInitError) Unwrap() error { return e.err }
-
 // ShouldFallback reports whether err indicates the CLI should fall back to
 // direct file mutation. This is true for transport-level failures (connection
-// refused, timeout), read-only API rejections (server bound to non-localhost,
-// mutations disabled), and client-init failures (malformed base URL).
+// refused, timeout) and for read-only API rejections (server bound to
+// non-localhost, mutations disabled).
 func ShouldFallback(err error) bool {
 	if IsConnError(err) {
 		return true
 	}
 	var ro *readOnlyError
-	if errors.As(err, &ro) {
-		return true
-	}
-	var ci *clientInitError
-	return errors.As(err, &ci)
+	return errors.As(err, &ro)
 }
 
 // Client is an HTTP client for the Gas City API server. It wraps the
@@ -86,7 +67,6 @@ func ShouldFallback(err error) bool {
 type Client struct {
 	cw       *genclient.ClientWithResponses
 	cityName string // non-empty for city-scoped clients; passed to every per-city call
-	initErr  error  // set when NewClient failed to build the transport (malformed baseURL, etc.)
 }
 
 // SessionSubmitResponse is the domain-facing shape of POST
@@ -135,35 +115,15 @@ func newClient(baseURL, cityName string) *Client {
 		// genclient.NewClient only returns errors for malformed URLs;
 		// the CLI hits this on misconfig — return a stub that errors on
 		// every method rather than panicking.
-		return &Client{initErr: &clientInitError{err: err}}
+		return &Client{}
 	}
 	return &Client{cw: cw, cityName: cityName}
-}
-
-// requireCityScope reports an error if the client was constructed as a
-// supervisor-scope client (empty cityName) but a per-city method was called.
-// Centralizes the check so silent `/v0/city//...` request construction is
-// impossible.
-func (c *Client) requireCityScope() error {
-	if c.initErr != nil {
-		return c.initErr
-	}
-	if c.cw == nil {
-		return errClientUninitialized
-	}
-	if c.cityName == "" {
-		return fmt.Errorf("api: per-city call requires NewCityScopedClient; use NewCityScopedClient(baseURL, cityName)")
-	}
-	return nil
 }
 
 // --- Lookup methods ---
 
 // ListCities fetches the current set of cities managed by the supervisor.
 func (c *Client) ListCities() ([]CityInfo, error) {
-	if c.initErr != nil {
-		return nil, c.initErr
-	}
 	if c.cw == nil {
 		return nil, errClientUninitialized
 	}
@@ -190,8 +150,8 @@ func (c *Client) ListCities() ([]CityInfo, error) {
 
 // ListServices fetches the current workspace service statuses.
 func (c *Client) ListServices() ([]workspacesvc.Status, error) {
-	if err := c.requireCityScope(); err != nil {
-		return nil, err
+	if c.cw == nil {
+		return nil, errClientUninitialized
 	}
 	resp, err := c.cw.GetV0CityByCityNameServicesWithResponse(context.Background(), c.cityName)
 	if err != nil {
@@ -216,8 +176,8 @@ func (c *Client) ListServices() ([]workspacesvc.Status, error) {
 
 // GetService fetches one current workspace service status.
 func (c *Client) GetService(name string) (workspacesvc.Status, error) {
-	if err := c.requireCityScope(); err != nil {
-		return workspacesvc.Status{}, err
+	if c.cw == nil {
+		return workspacesvc.Status{}, errClientUninitialized
 	}
 	resp, err := c.cw.GetV0CityByCityNameServiceByNameWithResponse(context.Background(), c.cityName, name)
 	if err != nil {
@@ -239,10 +199,13 @@ func (c *Client) GetService(name string) (workspacesvc.Status, error) {
 
 // RestartService restarts a service via POST /v0/service/{name}/restart.
 func (c *Client) RestartService(name string) error {
-	if err := c.requireCityScope(); err != nil {
-		return err
+	if c.cw == nil {
+		return errClientUninitialized
 	}
-	resp, err := c.cw.PostV0CityByCityNameServiceByNameRestartWithResponse(context.Background(), c.cityName, name)
+	// nil *Params: X-GC-Request is declared as a required header in the
+	// spec but set on every request by the RequestEditorFn configured in
+	// newClient, so callers pass nil for params.
+	resp, err := c.cw.PostV0CityByCityNameServiceByNameRestartWithResponse(context.Background(), c.cityName, name, nil)
 	return checkMutation(resp, err)
 }
 
@@ -253,10 +216,10 @@ func (c *Client) SuspendCity() error { return c.patchCity(true) }
 func (c *Client) ResumeCity() error { return c.patchCity(false) }
 
 func (c *Client) patchCity(suspend bool) error {
-	if err := c.requireCityScope(); err != nil {
-		return err
+	if c.cw == nil {
+		return errClientUninitialized
 	}
-	resp, err := c.cw.PatchV0CityByCityNameWithResponse(context.Background(), c.cityName, genclient.PatchV0CityByCityNameJSONRequestBody{Suspended: &suspend})
+	resp, err := c.cw.PatchV0CityByCityNameWithResponse(context.Background(), c.cityName, nil, genclient.PatchV0CityByCityNameJSONRequestBody{Suspended: &suspend})
 	return checkMutation(resp, err)
 }
 
@@ -274,8 +237,8 @@ func (c *Client) ResumeAgent(name string) error {
 }
 
 func (c *Client) postAgentAction(name, action string) error {
-	if err := c.requireCityScope(); err != nil {
-		return err
+	if c.cw == nil {
+		return errClientUninitialized
 	}
 	// Agents can be addressed unqualified or rig-qualified. The server
 	// exposes a distinct route for each shape — no trailing-path
@@ -283,12 +246,12 @@ func (c *Client) postAgentAction(name, action string) error {
 	if dir, base, ok := strings.Cut(name, "/"); ok {
 		resp, err := c.cw.PostV0CityByCityNameAgentByDirByBaseByActionWithResponse(
 			context.Background(), c.cityName, dir, base,
-			genclient.PostV0CityByCityNameAgentByDirByBaseByActionParamsAction(action))
+			genclient.PostV0CityByCityNameAgentByDirByBaseByActionParamsAction(action), nil)
 		return checkMutation(resp, err)
 	}
 	resp, err := c.cw.PostV0CityByCityNameAgentByBaseByActionWithResponse(
 		context.Background(), c.cityName, name,
-		genclient.PostV0CityByCityNameAgentByBaseByActionParamsAction(action))
+		genclient.PostV0CityByCityNameAgentByBaseByActionParamsAction(action), nil)
 	return checkMutation(resp, err)
 }
 
@@ -303,34 +266,35 @@ func (c *Client) ResumeRig(name string) error { return c.postRigAction(name, "re
 func (c *Client) RestartRig(name string) error { return c.postRigAction(name, "restart") }
 
 func (c *Client) postRigAction(name, action string) error {
-	if err := c.requireCityScope(); err != nil {
-		return err
+	if c.cw == nil {
+		return errClientUninitialized
 	}
-	resp, err := c.cw.PostV0CityByCityNameRigByNameByActionWithResponse(context.Background(), c.cityName, name, action)
+	resp, err := c.cw.PostV0CityByCityNameRigByNameByActionWithResponse(context.Background(), c.cityName, name, action, nil)
 	return checkMutation(resp, err)
 }
 
 // KillSession force-kills a session via POST /v0/session/{id}/kill.
 func (c *Client) KillSession(id string) error {
-	if err := c.requireCityScope(); err != nil {
-		return err
+	if c.cw == nil {
+		return errClientUninitialized
 	}
-	resp, err := c.cw.PostV0CityByCityNameSessionByIdKillWithResponse(context.Background(), c.cityName, id)
+	resp, err := c.cw.PostV0CityByCityNameSessionByIdKillWithResponse(context.Background(), c.cityName, id, nil)
 	return checkMutation(resp, err)
 }
 
 // SubmitSession sends a semantic submit request to a session. The id may
 // be either a bead ID or a resolvable session alias/name.
 func (c *Client) SubmitSession(id, message string, intent session.SubmitIntent) (SessionSubmitResponse, error) {
-	if err := c.requireCityScope(); err != nil {
-		return SessionSubmitResponse{}, err
+	if c.cw == nil {
+		return SessionSubmitResponse{}, errClientUninitialized
 	}
 	body := genclient.SubmitSessionJSONRequestBody{Message: message}
 	if intent != "" {
 		i := genclient.SubmitIntent(intent)
 		body.Intent = &i
 	}
-	resp, err := c.cw.SubmitSessionWithResponse(context.Background(), c.cityName, id, body)
+	// nil *SubmitSessionParams: X-GC-Request is set by the editor in newClient.
+	resp, err := c.cw.SubmitSessionWithResponse(context.Background(), c.cityName, id, nil, body)
 	if err != nil {
 		return SessionSubmitResponse{}, &connError{err: fmt.Errorf("request failed: %w", err)}
 	}

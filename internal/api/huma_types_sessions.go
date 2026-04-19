@@ -6,30 +6,28 @@ package api
 // These types drive the OpenAPI spec for all /v0/session* endpoints.
 
 import (
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
 // SessionListInput is the Huma input for GET /v0/city/{cityName}/sessions.
+//
+// Cursor uses huma.OptionalParam[string] rather than plain string so the
+// handler can distinguish "cursor absent" (no pagination — cap at limit,
+// return total=len(returned)) from "cursor present, possibly empty"
+// (paginate from decoded offset, return pre-pagination total) without
+// reading raw URL values. This is the Huma-documented idiom for
+// presence detection; see huma.rocks/features/request-inputs/ and the
+// OptionalParam generic in the Huma package. Prior revisions used a
+// Resolver that peeked at ctx.URL().Query().Has("cursor"), which
+// violated architecture.md §3.5.1 because the Resolver read an
+// undeclared URL key.
 type SessionListInput struct {
 	CityScope
-	PaginationParam
-	State    string `query:"state" required:"false" doc:"Filter by session state (e.g. active, closed)."`
-	Template string `query:"template" required:"false" doc:"Filter by session template (agent qualified name)."`
-	Peek     bool   `query:"peek" required:"false" doc:"Include last output preview."`
-
-	// cursorPresent is set by Resolve to distinguish "cursor absent" from
-	// "cursor present but empty" in the query string. Huma gives "" for both.
-	cursorPresent bool
-}
-
-// Resolve implements huma.Resolver to detect whether the cursor query
-// parameter was explicitly provided (even as an empty string).
-func (s *SessionListInput) Resolve(ctx huma.Context) []error {
-	// huma.Context.URL() returns the parsed URL; check raw query for cursor key.
-	u := ctx.URL()
-	s.cursorPresent = u.Query().Has("cursor")
-	return nil
+	Cursor   OptionalParam[string] `query:"cursor" doc:"Pagination cursor from a previous response's next_cursor field. Omit to receive up to limit items with total=len(items); supply (possibly empty) to paginate from offset 0 with total=pre-pagination count."`
+	Limit    int                   `query:"limit" minimum:"0" doc:"Maximum number of results to return. 0 = server default."`
+	State    string                `query:"state" required:"false" doc:"Filter by session state (e.g. active, closed)."`
+	Template string                `query:"template" required:"false" doc:"Filter by session template (agent qualified name)."`
+	Peek     bool                  `query:"peek" required:"false" doc:"Include last output preview."`
 }
 
 // SessionGetInput is the Huma input for GET /v0/city/{cityName}/session/{id}.

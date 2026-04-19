@@ -31,12 +31,9 @@ type OrderCheckInput struct {
 }
 
 // OrderHistoryInput is the Huma input for GET /v0/city/{cityName}/orders/history.
-// scoped_name is a hard requirement — the handler returns 400 when it is
-// empty, so the spec marks it required so SDKs and docs under-validate
-// the request at the edge instead of only at runtime.
 type OrderHistoryInput struct {
 	CityScope
-	ScopedName string `query:"scoped_name" required:"true" minLength:"1" doc:"Scoped order name."`
+	ScopedName string `query:"scoped_name" required:"false" doc:"Scoped order name."`
 	Limit      int    `query:"limit" required:"false" minimum:"0" doc:"Maximum number of history entries. 0 = default."`
 	Before     string `query:"before" required:"false" doc:"Return entries before this RFC3339 timestamp."`
 }

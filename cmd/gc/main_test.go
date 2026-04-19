@@ -1550,12 +1550,8 @@ func TestDoInitBootstrapsExistingCityToml(t *testing.T) {
 	if !f.Dirs[filepath.Join("/city", ".gc")] {
 		t.Error(".gc/ should be created during bootstrap")
 	}
-	// Post stale-mirror fix (V1 adoption): hooks/claude.json is only
-	// written when the user explicitly selects it as the Claude settings
-	// source or when upgrading a known-stale gc-generated pattern. Fresh
-	// bootstraps produce only the gc-managed .gc/settings.json.
-	if _, ok := f.Files[filepath.Join("/city", ".gc", "settings.json")]; !ok {
-		t.Error(".gc/settings.json should be created during bootstrap")
+	if _, ok := f.Files[filepath.Join("/city", "hooks", "claude.json")]; !ok {
+		t.Error("hooks/claude.json should be created during bootstrap")
 	}
 }
 
@@ -1618,17 +1614,16 @@ func TestDoInitCreatesSettings(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doInit = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	// Post stale-mirror fix: the gc-managed .gc/settings.json is the
-	// Claude settings file `gc` passes via --settings. hooks/claude.json
-	// is only written for legacy-hook-source installs; fresh bootstraps
-	// (like this one) leave it untouched.
-	runtimePath := filepath.Join("/bright-lights", ".gc", "settings.json")
-	data, ok := f.Files[runtimePath]
+	settingsPath := filepath.Join("/bright-lights", "hooks", "claude.json")
+	data, ok := f.Files[settingsPath]
 	if !ok {
+		t.Fatal("hooks/claude.json not created")
+	}
+	if _, ok := f.Files[filepath.Join("/bright-lights", ".gc", "settings.json")]; !ok {
 		t.Fatal(".gc/settings.json not created")
 	}
 	if len(data) == 0 {
-		t.Fatal(".gc/settings.json is empty")
+		t.Fatal("hooks/claude.json is empty")
 	}
 }
 
@@ -1639,12 +1634,10 @@ func TestDoInitSettingsIsValidJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doInit = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	// Post stale-mirror fix: validate the gc-managed runtime settings
-	// (the file Claude is actually invoked with) rather than the legacy
-	// hook mirror, which is no longer seeded on fresh installs.
-	data := f.Files[filepath.Join("/bright-lights", ".gc", "settings.json")]
-	if len(data) == 0 {
-		t.Fatal(".gc/settings.json not created or empty")
+	settingsPath := filepath.Join("/bright-lights", "hooks", "claude.json")
+	data := f.Files[settingsPath]
+	if got := string(f.Files[filepath.Join("/bright-lights", ".gc", "settings.json")]); got != string(data) {
+		t.Fatalf(".gc/settings.json = %q, want mirror of hooks/claude.json", got)
 	}
 
 	var parsed map[string]any
@@ -3757,7 +3750,7 @@ func TestFindEnclosingRigResolvesSymlinkAlias(t *testing.T) {
 	dirViaAlias := filepath.Join(aliasRigPath, "src")
 
 	name, rp, found := findEnclosingRig(dirViaAlias, rigs)
-	if !found || name != "my-project" || rp != rigPath {
+	if !found || name != "my-project" || canonicalTestPath(rp) != canonicalTestPath(rigPath) {
 		t.Fatalf("symlink alias match: name=%q path=%q found=%v, want name=%q path=%q found=true", name, rp, found, "my-project", rigPath)
 	}
 }
@@ -3782,7 +3775,7 @@ func TestFindEnclosingRigPrefersDeepestNormalizedMatch(t *testing.T) {
 	dirViaAlias := filepath.Join(aliasRoot, "my-project", "nested", "src")
 
 	name, rp, found := findEnclosingRig(dirViaAlias, rigs)
-	if !found || name != "nested" || rp != nestedRigPath {
+	if !found || name != "nested" || canonicalTestPath(rp) != canonicalTestPath(nestedRigPath) {
 		t.Fatalf("deepest normalized match: name=%q path=%q found=%v, want name=%q path=%q found=true", name, rp, found, "nested", nestedRigPath)
 	}
 }

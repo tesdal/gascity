@@ -9,6 +9,17 @@ import (
 	"testing"
 )
 
+func hookOutputFields(output string) map[string]string {
+	fields := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			fields[key] = value
+		}
+	}
+	return fields
+}
+
 func TestHookNoWork(t *testing.T) {
 	runner := func(string, string) (string, error) { return "", nil }
 	var stdout, stderr bytes.Buffer
@@ -212,12 +223,9 @@ max = 5
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "pwd="+rigDir) {
-		t.Fatalf("stdout = %q, want command to run from rig root %q", out, rigDir)
-	}
-	if !strings.Contains(out, "store_root="+rigDir) {
-		t.Fatalf("stdout = %q, want GC_STORE_ROOT=%q", out, rigDir)
-	}
+	fields := hookOutputFields(out)
+	assertSameTestPath(t, fields["pwd"], rigDir)
+	assertSameTestPath(t, fields["store_root"], rigDir)
 	if !strings.Contains(out, "store_scope=rig") {
 		t.Fatalf("stdout = %q, want GC_STORE_SCOPE=rig", out)
 	}
@@ -227,9 +235,7 @@ max = 5
 	if !strings.Contains(out, "rig=myrig") {
 		t.Fatalf("stdout = %q, want GC_RIG=myrig", out)
 	}
-	if !strings.Contains(out, "rig_root="+rigDir) {
-		t.Fatalf("stdout = %q, want GC_RIG_ROOT=%q", out, rigDir)
-	}
+	assertSameTestPath(t, fields["rig_root"], rigDir)
 	// Tiered query: first tier checks in_progress assigned to session name.
 	if !strings.Contains(out, "args=list --status in_progress --assignee=myrig--polecat --json --limit=1") {
 		t.Fatalf("stdout = %q, want pool work_query args", out)
@@ -417,10 +423,12 @@ dir = "workdir"
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
+	fields := hookOutputFields(out)
 	wantBeads := filepath.Join(cityDir, ".beads")
-	if !strings.Contains(out, "beads_dir="+wantBeads) {
+	if fields["beads_dir"] == "" {
 		t.Fatalf("stdout = %q, want BEADS_DIR=%s (city store), non-rig agent must not be pointed at <dir>/.beads", out, wantBeads)
 	}
+	assertSameTestPath(t, fields["beads_dir"], wantBeads)
 	// Non-rig agents must not receive GC_RIG_ROOT. doHook strips trailing
 	// whitespace, so the empty value lands at the very end of the output.
 	if !strings.HasSuffix(out, "rig_root=") {
@@ -491,9 +499,8 @@ max = 5
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "pwd="+rigDir) {
-		t.Fatalf("stdout = %q, want command to run from rig root %q", out, rigDir)
-	}
+	fields := hookOutputFields(out)
+	assertSameTestPath(t, fields["pwd"], rigDir)
 	// Tiered query: first tier checks in_progress assigned to session name.
 	if !strings.Contains(out, "args=list --status in_progress --assignee=myrig--polecat-1 --json --limit=1") {
 		t.Fatalf("stdout = %q, want pool template work_query args", out)

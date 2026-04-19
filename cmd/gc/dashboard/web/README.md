@@ -15,14 +15,17 @@ Requires Node 20+ and npm.
 npm install          # one-time
 npm run gen          # regenerate src/generated/schema.d.ts from the spec
 npm run typecheck    # tsc --noEmit
+npm test             # Vitest/jsdom dashboard tests
 npm run build        # Vite production build → dist/
 npm run dev          # Vite dev server with HMR on :5173
 ```
 
-`dist/` is git-ignored. It is built fresh by CI and by the pre-commit
-hook (see `.githooks/pre-commit`). Run `npm run build` before handing
-a branch to a reviewer if they don't have Node available — or let the
-hook do it.
+`dist/` is tracked because the Go static server embeds it. It is rebuilt
+by CI and by the pre-commit hook (see `.githooks/pre-commit`) whenever
+the dashboard source or OpenAPI spec changes. Run `make dashboard-check`
+before handing off dashboard or API-schema changes; for a runtime smoke
+test, run `npm run preview -- --host 127.0.0.1 --port <port>` after the
+build and load the served page.
 
 `src/generated/` is also git-ignored. `npm run gen` must be run after
 any change to `internal/api/openapi.json`. The pre-commit hook does

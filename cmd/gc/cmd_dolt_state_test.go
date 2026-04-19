@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,6 +51,11 @@ func parseDoltRuntimeLayoutOutput(t *testing.T, out string) map[string]string {
 
 func requireDeletedPathHeld(t *testing.T, pid int, targetPath string) {
 	t.Helper()
+	switch runtime.GOOS {
+	case "linux", "darwin":
+	default:
+		t.Skipf("deleted inode detection is not implemented on %s", runtime.GOOS)
+	}
 	deadline := time.Now().Add(15 * time.Second)
 	for !processHoldsDeletedPath(pid, targetPath) {
 		if time.Now().After(deadline) {
@@ -484,6 +490,7 @@ while True:
 	if err := proc.Start(); err != nil {
 		t.Fatalf("start python: %v", err)
 	}
+	deletedPath := filepath.Join(layout.DataDir, "stale-open.txt")
 	defer func() {
 		_ = proc.Process.Kill()
 		_, _ = proc.Process.Wait()
@@ -503,6 +510,7 @@ while True:
 	}); err != nil {
 		t.Fatalf("writeDoltRuntimeStateFile: %v", err)
 	}
+	requireDeletedPathHeld(t, proc.Process.Pid, deletedPath)
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"dolt-state", "inspect-managed", "--city", cityPath}, &stdout, &stderr)
@@ -1277,6 +1285,17 @@ while True:
 }
 
 func processHoldsDeletedPath(pid int, targetPath string) bool {
+	switch runtime.GOOS {
+	case "linux":
+		return processHoldsDeletedPathViaProc(pid, targetPath)
+	case "darwin":
+		return processHoldsDeletedPathViaLsof(pid, targetPath)
+	default:
+		return false
+	}
+}
+
+func processHoldsDeletedPathViaProc(pid int, targetPath string) bool {
 	fdDir := filepath.Join("/proc", strconv.Itoa(pid), "fd")
 	entries, err := os.ReadDir(fdDir)
 	if err != nil {
@@ -1288,6 +1307,27 @@ func processHoldsDeletedPath(pid int, targetPath string) bool {
 			continue
 		}
 		if samePath(strings.TrimSuffix(target, " (deleted)"), targetPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func processHoldsDeletedPathViaLsof(pid int, targetPath string) bool {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return false
+	}
+	out, ok := lsofOutput("-a", "-p", strconv.Itoa(pid), "+L1")
+	if !ok {
+		return false
+	}
+	cleanTarget := filepath.Clean(targetPath)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 || fields[7] != "0" {
+			continue
+		}
+		if samePossiblyDeletedPath(strings.Join(fields[9:], " "), cleanTarget) {
 			return true
 		}
 	}
