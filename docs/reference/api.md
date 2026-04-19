@@ -107,6 +107,79 @@ closes immediately. For example, `GET /v0/events/stream` returns
 `503 application/problem+json` with `detail: "no_providers: ..."`
 when no running city has an event provider registered.
 
+## Creating a city (asynchronous)
+
+`POST /v0/city` is an **asynchronous** operation. The response is
+`202 Accepted` returned as soon as the city has been scaffolded on
+disk and registered with the supervisor. The slow finalize work
+(pack materialization, bead store startup, formula resolution,
+agent validation) runs on the supervisor reconciler's next tick.
+Clients observe completion via the supervisor event stream — there
+is nothing to poll.
+
+### Response
+
+```json
+{
+  "ok": true,
+  "name": "my-city",
+  "path": "/abs/path/to/my-city"
+}
+```
+
+The `name` field is the city's resolved runtime identity
+(`workspace.name` from `city.toml`, or the directory basename).
+Use it to filter the event stream for completion.
+
+### Completion events
+
+On the same `/v0/events/stream` the client will see (in order):
+
+- `city.created` (`CityCreatedPayload`) — emitted by the scaffold
+  step before `POST` returns. `subject` and payload `name` equal
+  the response's `name`.
+- `city.ready` (`CityReadyPayload`) — the reconciler finished
+  `prepareCityForSupervisor` successfully. Matching event:
+  `subject == name` and `type == "city.ready"`.
+- `city.init_failed` (`CityInitFailedPayload`) — the reconciler
+  gave up. The payload's `error` field describes why.
+
+Exactly one of `city.ready` or `city.init_failed` lands per
+successful `POST`. Clients wait for either; no polling of
+`GET /v0/cities` or `GET /v0/city/{cityName}/readiness` is
+required.
+
+### Subscribe before or after POST
+
+Either order works. The recommended flow is:
+
+1. `POST /v0/city` and wait for `202`.
+2. `GET /v0/events/stream?after_cursor=0` — request replay from
+   the start so `city.created` (and possibly `city.ready`) are
+   delivered even if they fired before subscribe.
+3. Read frames until `subject == response.name` and
+   `type ∈ {"city.ready", "city.init_failed"}`.
+
+**Empty supervisor is fine.** The event stream works even when
+no cities existed before the `POST`. `POST` writes the city to
+the supervisor registry (`cities.toml`) and creates
+`.gc/events.jsonl` synchronously before returning 202, so the
+event multiplexer finds the new city on the very next
+`buildMultiplexer` call. Subscribers do **not** need to retry on
+`503 no_providers`; if that error surfaces after a successful
+202, it's a bug.
+
+### Errors
+
+- `409 conflict: city already initialized at <path>` — the target
+  directory already has a scaffolded city.
+- `422` — invalid provider, invalid bootstrap profile, or other
+  body-validation failure.
+- `503` — a hard dependency is missing on the host, or a provider
+  the city needs is not ready.
+- `500` — unexpected scaffold failure; consult the server logs
+  via the `X-GC-Request-Id` correlation header.
+
 ## Event Contract
 
 The event APIs, the SSE streams, and `gc events` are the same contract

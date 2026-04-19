@@ -20,9 +20,25 @@ Two architectural themes run through everything below:
 ## 1. The object model
 
 `internal/{beads, mail, convoy, formula, agent, events, session,
-sling, graphroute, agentutil, pathutil, ...}` is the canonical
-domain. All business logic lives there. The two surfaces below call
-into it; neither re-implements validation, routing, or invariants.
+sling, graphroute, agentutil, pathutil, cityinit, ...}` is the
+canonical domain. All business logic lives there. The two surfaces
+below call into it; neither re-implements validation, routing, or
+invariants.
+
+City initialization is a worked example: the HTTP handler for
+`POST /v0/city` does **not** shell out to `gc init`; it calls
+`cityinit.Initializer.Scaffold` in-process, which is the same
+entry point the CLI drives. The scaffolded city registers with
+the supervisor synchronously before `202 Accepted` returns; the
+reconciler runs the slow finalize later and publishes `city.ready`
+/ `city.init_failed` events. Both projections live on the same
+typed contract and error sentinels
+(`cityinit.ErrAlreadyInitialized`, `ErrInvalidProvider`,
+`ErrMissingDependency`, `ErrProviderNotReady`,
+`ErrInvalidBootstrapProfile`). Long-running mutations in general
+follow this shape: scaffold synchronously, return 202, publish
+completion events — subscribers watch the event stream instead of
+polling.
 
 ```
 cmd/gc/cmd_*.go               internal/api/handler_*.go
@@ -623,9 +639,10 @@ rename or remove a cited symbol (`events.KnownEventTypes`,
 `EventPayloadUnion`, `TestEveryKnownEventTypeHasRegisteredPayload`,
 `cmd/gc/apiroute.go:apiClient()`, `addMutationCSRFParam`,
 `registerFrameworkHeaders`, `sseResponseHeaders`,
-`OptionalParam`, etc.), **update this spec in the
-same commit**. A stale spec is worse than no spec — it misleads
-future agents about what invariants hold.
+`OptionalParam`, `cityinit.Initializer`, `cityinit.InitRequest`,
+`cityinit.InitResult`, `TransientCityEventSource`, etc.), **update
+this spec in the same commit**. A stale spec is worse than no spec —
+it misleads future agents about what invariants hold.
 
 Framework-specific patterns and Huma quirks are captured in
 [`specs/huma-usage.md`](./huma-usage.md); update that file in the

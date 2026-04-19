@@ -9,6 +9,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/supervisor"
 )
 
 // cityView is a read-only projection of managedCity, built at snapshot time.
@@ -174,25 +175,64 @@ func (r *cityRegistry) Snapshot() *citySnapshot {
 	return r.snap.Load()
 }
 
-// FailedCityEventProviders implements api.FailedCityEventSource so
-// the supervisor-scope event multiplexer can surface city.init_failed
-// events to /v0/events/stream subscribers. Opens each failed city's
-// .gc/events.jsonl file read-only; the consumer is expected to close
-// via the provider's lifecycle. Best-effort: cities whose event file
-// is missing or unreadable are simply skipped.
-func (r *cityRegistry) FailedCityEventProviders() map[string]events.Provider {
-	r.citiesMu.Lock()
-	paths := make(map[string]string, len(r.initFailures))
+// TransientCityEventProviders implements api.TransientCityEventSource
+// so the supervisor-scope event multiplexer can surface events from
+// every registered city's .gc/events.jsonl — including those that
+// aren't yet in the Running set. Covers four cases uniformly:
+//
+//   - Newly scaffolded: written to cities.toml by Scaffold, but the
+//     reconciler hasn't picked it up yet. Not in cityRegistry snap
+//     yet; discovered directly from the on-disk supervisor registry.
+//   - Pending: reconciler picked up, cityView exists in snap.all
+//     with Started=false.
+//   - In progress: reconciler is running prepareCityForSupervisor.
+//   - Failed: reconciler gave up; entry lives in initFailures.
+//
+// Reading cities.toml directly (not just snap.all) closes the race
+// between Scaffold returning 202 and the reconciler tick picking up
+// the city — a client that subscribes to /v0/events/stream
+// immediately after POST /v0/city sees the new city's event file in
+// the multiplexer without waiting for the reconciler.
+//
+// Best-effort: cities whose event file is missing or unreadable are
+// simply skipped.
+func (r *cityRegistry) TransientCityEventProviders() map[string]events.Provider {
 	snap := r.snap.Load()
-	for path := range r.initFailures {
-		if v, ok := snap.byPath[path]; ok && v.Name != "" {
-			paths[v.Name] = path
+	// Collect non-Running cities known to the runtime registry.
+	paths := make(map[string]string, len(snap.all))
+	for _, v := range snap.all {
+		if v == nil || v.Started {
 			continue
 		}
-		// Fall back to basename if we don't have a resolved name yet.
-		paths[filepath.Base(path)] = path
+		name := v.Name
+		if name == "" {
+			name = filepath.Base(v.Path)
+		}
+		paths[name] = v.Path
 	}
-	r.citiesMu.Unlock()
+	// Also read cities.toml directly so cities Scaffold just
+	// registered — but the reconciler hasn't processed yet — are
+	// visible. Running cities already covered by the main
+	// multiplexer loop (via ListCities); skip them here.
+	running := make(map[string]struct{}, len(snap.byName))
+	for name, v := range snap.byName {
+		if v != nil && v.Started {
+			running[name] = struct{}{}
+		}
+	}
+	reg := supervisor.NewRegistry(supervisor.RegistryPath())
+	if entries, err := reg.List(); err == nil {
+		for _, e := range entries {
+			name := e.EffectiveName()
+			if _, already := running[name]; already {
+				continue
+			}
+			if _, already := paths[name]; already {
+				continue
+			}
+			paths[name] = e.Path
+		}
+	}
 
 	out := make(map[string]events.Provider, len(paths))
 	for name, path := range paths {

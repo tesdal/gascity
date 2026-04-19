@@ -241,6 +241,52 @@ func registerCityWithSupervisorNamed(cityPath, nameOverride string, stdout, stde
 	return 0
 }
 
+// registerCityForAPI is the fire-and-forget variant of
+// registerCityWithSupervisor for the async POST /v0/city path.
+// Writes the city to the supervisor registry and signals the
+// reconciler to wake up, but does NOT wait for the reconciler to
+// finish processing the city — if we waited, POST would block on
+// the full prepareCityForSupervisor (pack materialization, beads
+// lifecycle, etc.) which is the exact behavior the async contract
+// was designed to avoid. The reconciler picks up the city on its
+// next tick; subscribers to /v0/events/stream see city.created
+// (written by Scaffold), then city.ready or city.init_failed when
+// the reconciler completes.
+func registerCityForAPI(cityPath, nameOverride string) error {
+	cityPath = normalizePathForCompare(cityPath)
+	name, err := registeredCityName(cityPath, nameOverride)
+	if err != nil {
+		return err
+	}
+	reg := supervisor.NewRegistry(supervisor.RegistryPath())
+	if err := reg.Register(cityPath, name); err != nil {
+		return err
+	}
+	// Best-effort wake: if the supervisor isn't reachable, fall
+	// through; the periodic ticker will pick up the registry entry
+	// on its next interval.
+	reloadSupervisorNoWait()
+	return nil
+}
+
+// reloadSupervisorNoWait sends a "reload" command to the supervisor
+// socket without waiting for the reply. Used by registerCityForAPI
+// so the async POST /v0/city handler doesn't block on the
+// reconciler tick.
+func reloadSupervisorNoWait() {
+	sockPath, _ := runningSupervisorSocket()
+	if sockPath == "" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close() //nolint:errcheck // best-effort
+	_ = conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
+	_, _ = conn.Write([]byte("reload\n"))
+}
+
 func keepRegisteredCity(entry supervisor.CityEntry, stderr io.Writer, commandName, reason string) {
 	fmt.Fprintf(stderr, "%s: %s; keeping registration for '%s' so the supervisor can retry automatically\n", //nolint:errcheck // best-effort stderr
 		commandName, reason, entry.EffectiveName())

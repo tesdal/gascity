@@ -2394,9 +2394,21 @@ gc supervisor status
 
 Stop the running machine-wide supervisor and all its cities.
 
+By default, returns as soon as the supervisor acknowledges the stop
+request — shutdown continues asynchronously. Pass --wait to block
+until the supervisor socket is no longer answering, which is what
+most callers that need deterministic cleanup want (e.g., integration
+tests that then expect to remove temp directories without racing
+against lingering supervisor / controller subprocesses).
+
 ```
-gc supervisor stop
+gc supervisor stop [flags]
 ```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--wait` | bool |  | Wait for the supervisor to finish stopping all managed cities and release its socket before returning |
+| `--wait-timeout` | duration | `30s` | Maximum time to wait when --wait is set |
 
 ## gc supervisor uninstall
 

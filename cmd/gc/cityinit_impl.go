@@ -16,13 +16,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/cityinit"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
 
@@ -73,15 +76,52 @@ func (localInitializer) Scaffold(_ context.Context, req cityinit.InitRequest) (*
 		return nil, fmt.Errorf("scaffold failed (exit %d)", code)
 	}
 
-	// Register the city with the supervisor so the reconciler picks
-	// it up on its next tick. API-created cities land in the
-	// registry; prepareCityForSupervisor runs asynchronously and
-	// emits city.ready / city.init_failed when done.
-	if code := registerCityWithSupervisor(dir, io.Discard, io.Discard, "POST /v0/city", false); code != 0 {
-		return nil, fmt.Errorf("register with supervisor failed (exit %d)", code)
+	cityName := resolveCityName(req.NameOverride, dir)
+
+	// Create .gc/events.jsonl immediately and emit city.created before
+	// the supervisor reconciler picks up the city. Two reasons:
+	//
+	// 1. The supervisor event multiplexer (see
+	//    internal/api/supervisor.go:buildMultiplexer) includes
+	//    transient-city event providers via
+	//    TransientCityEventSource. With the file in place, a
+	//    subscriber to /v0/events/stream that connects right after
+	//    POST returns 202 sees a non-empty multiplexer and can
+	//    replay events via after_cursor=0.
+	//
+	// 2. The supervisor event stream's no-providers precheck rejects
+	//    subscriptions with 503 when the multiplexer is empty. By
+	//    populating at least one event log before registration,
+	//    POST /v0/city → subscribe works even when no other cities
+	//    exist yet (the fresh-supervisor scenario).
+	//
+	// Best-effort: a failure to open the recorder does not fail the
+	// Scaffold call — the reconciler creates its own recorder later
+	// and city.ready/city.init_failed will land there. The city is
+	// still usable, just without the leading city.created marker.
+	if fr, frErr := events.NewFileRecorder(filepath.Join(dir, ".gc", "events.jsonl"), io.Discard); frErr == nil {
+		if payload, mErr := json.Marshal(api.CityCreatedPayload{Name: cityName, Path: dir}); mErr == nil {
+			fr.Record(events.Event{
+				Type:    events.CityCreated,
+				Actor:   "gc",
+				Subject: cityName,
+				Payload: payload,
+			})
+		}
+		fr.Close() //nolint:errcheck // best-effort
 	}
 
-	cityName := resolveCityName(req.NameOverride, dir)
+	// Register the city with the supervisor without blocking on the
+	// reconciler's tick. The standard registerCityWithSupervisor
+	// waits for prepareCityForSupervisor to complete, which is the
+	// very blocking behavior the async POST /v0/city contract
+	// exists to avoid. registerCityForAPI fires a reload signal at
+	// the supervisor and returns immediately; the reconciler picks
+	// up the city on its own schedule.
+	if err := registerCityForAPI(dir, req.NameOverride); err != nil {
+		return nil, fmt.Errorf("register with supervisor: %w", err)
+	}
+
 	return &cityinit.InitResult{
 		CityName:     cityName,
 		CityPath:     dir,

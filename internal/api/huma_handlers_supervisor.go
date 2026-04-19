@@ -376,11 +376,16 @@ func (sm *SupervisorMux) humaHandleEventList(_ context.Context, input *Superviso
 
 // --- Supervisor global events stream (Fix 3g final wiring) ---
 
-// precheckGlobalEventStream validates that the global event stream can
-// actually deliver events before committing 200 headers. Two failure
-// modes both produce 503 Problem Details instead of 200+EOF:
+// precheckGlobalEventStream validates that the global event stream
+// can actually deliver events before committing 200 headers. Two
+// failure modes both produce 503 Problem Details instead of 200+EOF:
 //
-//  1. No event providers registered at all (empty mux).
+//  1. No event providers registered at all (empty mux). In practice
+//     this only happens when zero cities are registered in the
+//     supervisor — the TransientCityEventSource resolver extension
+//     surfaces event files for every registered city (running,
+//     pending, or failed) so any POST /v0/city → subscribe flow
+//     finds the newly-registered city in the mux.
 //  2. Providers exist but none can attach a watcher right now.
 //
 // The precheck attaches a watcher and closes it immediately — a

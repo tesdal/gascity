@@ -34,17 +34,23 @@ type CityResolver interface {
 	CityState(name string) State
 }
 
-// FailedCityEventSource is an optional CityResolver extension that
-// lets the supervisor-scope event multiplexer include event providers
-// for cities whose init failed (so subscribers of /v0/events/stream
-// can observe city.init_failed events without polling). Resolvers
-// that implement this return one entry per failed city; the key is
-// the city name, the value is an event provider backed by that
-// city's .gc/events.jsonl file. Failed cities are not in
-// ListCities's Running set so the existing multiplexer loop skips
-// them; this method reintroduces them for event-stream purposes only.
-type FailedCityEventSource interface {
-	FailedCityEventProviders() map[string]events.Provider
+// TransientCityEventSource is an optional CityResolver extension
+// that lets the supervisor-scope event multiplexer include event
+// providers for cities that are registered but not yet (or no
+// longer) in the Running set — newly scaffolded cities whose
+// reconciler hasn't picked them up, cities currently running
+// prepareCityForSupervisor, and cities whose init failed. Without
+// this, /v0/events/stream subscribers can't observe city.created,
+// city.ready, or city.init_failed for cities that aren't yet
+// reporting Running=true through ListCities.
+//
+// Resolvers that implement this return one entry per transient
+// city; the key is the city name, the value is an event provider
+// backed by that city's .gc/events.jsonl file. The supervisor
+// multiplexer adds these on top of the Running-city providers it
+// already picks up via ListCities + CityState.
+type TransientCityEventSource interface {
+	TransientCityEventProviders() map[string]events.Provider
 }
 
 // cachedCityServer pairs a State with its pre-built Server for caching.
@@ -262,12 +268,13 @@ func (sm *SupervisorMux) getCityServer(name string, state State) *Server {
 }
 
 // buildMultiplexer creates a Multiplexer from all running cities'
-// event providers plus any failed-city providers surfaced by a
-// resolver that implements FailedCityEventSource. Including failed
-// cities matters for clients that call POST /v0/city and wait for
-// a city.init_failed event on /v0/events/stream — without it, the
-// event would be written to the city's events.jsonl but never reach
-// supervisor-scope subscribers.
+// event providers plus any transient-city providers surfaced by a
+// resolver that implements TransientCityEventSource. Including
+// transient (pending init, in-progress, or failed) cities matters
+// for clients that POST /v0/city and wait for city.created /
+// city.ready / city.init_failed events on /v0/events/stream without
+// polling — the city's own events.jsonl exists from Scaffold
+// onward, but the city isn't in Running=true yet.
 func (sm *SupervisorMux) buildMultiplexer() *events.Multiplexer {
 	mux := events.NewMultiplexer()
 	cities := sm.resolver.ListCities()
@@ -285,8 +292,8 @@ func (sm *SupervisorMux) buildMultiplexer() *events.Multiplexer {
 		}
 		mux.Add(c.Name, ep)
 	}
-	if failed, ok := sm.resolver.(FailedCityEventSource); ok {
-		for name, ep := range failed.FailedCityEventProviders() {
+	if transient, ok := sm.resolver.(TransientCityEventSource); ok {
+		for name, ep := range transient.TransientCityEventProviders() {
 			if ep == nil {
 				continue
 			}

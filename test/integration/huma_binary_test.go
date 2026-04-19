@@ -266,3 +266,200 @@ func waitHTTP(t *testing.T, url string, deadline time.Duration) {
 		}
 	}
 }
+
+// TestHumaBinary_CityCreateAsync exercises the async POST /v0/city
+// contract end-to-end against a live supervisor: subscribe to
+// /v0/events/stream, POST /v0/city, verify the handler returns 202
+// immediately with {ok, name, path}, then assert a city.ready event
+// for that city name arrives on the SSE stream. This is the test MC's
+// live contract harness implicitly needs — without it, any
+// regression in Scaffold, the reconciler's city.ready emission, or
+// the supervisor event multiplexer would ship unnoticed.
+//
+// Build-tagged `integration`; run with:
+//
+//	go test -tags=integration ./test/integration/ -run TestHumaBinary_CityCreateAsync
+func TestHumaBinary_CityCreateAsync(t *testing.T) {
+	bin := buildGCBinary(t)
+
+	root := shortTempDir(t)
+	gcHome := filepath.Join(root, "home")
+	runtimeDir := filepath.Join(root, "run")
+	for _, dir := range []string{gcHome, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	port := reserveFreePort(t)
+	writeSupervisorConfig(t, gcHome, port)
+
+	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	env := append(os.Environ(),
+		"GC_HOME="+gcHome,
+		"XDG_RUNTIME_DIR="+runtimeDir,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, bin, "supervisor", "run")
+	cmd.Env = env
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start supervisor: %v", err)
+	}
+	var supervisorLog strings.Builder
+	go func() { _, _ = io.Copy(&supervisorLog, stderr) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = cmd.Wait()
+		if t.Failed() {
+			t.Logf("supervisor stderr:\n%s", supervisorLog.String())
+		}
+	})
+
+	waitHTTP(t, baseURL+"/health", 10*time.Second)
+
+	// 1. POST /v0/city. Expected: 202 Accepted, body contains name
+	// matching the directory basename. We POST first because the
+	// supervisor event stream rejects subscriptions when no event
+	// providers are registered (503 no_providers), which is the
+	// case before any city exists.
+	cityDir := filepath.Join(gcHome, "async-test-city")
+	body := `{"dir":"` + cityDir + `","provider":"claude"}`
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v0/city", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build post request: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("X-GC-Request", "true")
+	postStart := time.Now()
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		t.Fatalf("POST /v0/city: %v", err)
+	}
+	postDur := time.Since(postStart)
+	postBody, _ := io.ReadAll(postResp.Body)
+	_ = postResp.Body.Close()
+	if postResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /v0/city status = %d, want 202; body: %s", postResp.StatusCode, string(postBody))
+	}
+	if postDur > 20*time.Second {
+		t.Errorf("POST /v0/city took %s, want fast scaffold response (<20s); async contract is broken", postDur)
+	}
+	var createResp struct {
+		OK   bool   `json:"ok"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(postBody, &createResp); err != nil {
+		t.Fatalf("decode create response: %v; body: %s", err, string(postBody))
+	}
+	if !createResp.OK {
+		t.Errorf("ok = false; body: %s", string(postBody))
+	}
+	if createResp.Name == "" {
+		t.Fatalf("empty city name in response; body: %s", string(postBody))
+	}
+	if createResp.Path != cityDir {
+		t.Errorf("path = %q, want %q", createResp.Path, cityDir)
+	}
+	t.Logf("POST /v0/city returned 202 in %s for city %q", postDur.Round(time.Millisecond), createResp.Name)
+
+	// 2. Subscribe to /v0/events/stream. No retry: Scaffold writes
+	// the city to cities.toml synchronously before POST returns, and
+	// TransientCityEventProviders reads cities.toml directly, so the
+	// mux contains this city's event provider by the time the client
+	// receives 202. after_cursor=0 requests replay from the start
+	// so the client doesn't miss city.ready if it fires between POST
+	// return and subscribe.
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	t.Cleanup(streamCancel)
+	streamReq, err := http.NewRequestWithContext(streamCtx, http.MethodGet, baseURL+"/v0/events/stream?after_cursor=0", nil)
+	if err != nil {
+		t.Fatalf("build stream request: %v", err)
+	}
+	streamReq.Header.Set("Accept", "text/event-stream")
+	streamResp, err := http.DefaultClient.Do(streamReq)
+	if err != nil {
+		t.Fatalf("GET /v0/events/stream: %v", err)
+	}
+	defer streamResp.Body.Close() //nolint:errcheck
+	if streamResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(streamResp.Body)
+		t.Fatalf("GET /v0/events/stream status = %d, want 200; body: %s", streamResp.StatusCode, string(body))
+	}
+
+	// Collect events on a background goroutine; surface them via a
+	// channel so the test body can block until the expected one
+	// arrives (or a timeout fires).
+	eventLines := make(chan string, 128)
+	go readSSEFrames(streamResp.Body, eventLines)
+
+	// 3. Wait for city.ready (or city.init_failed) on the SSE stream
+	// whose envelope Subject == createResp.Name. This is the async
+	// completion contract the MC live harness relies on.
+	deadline := time.After(120 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for city.ready for %q; collected %d lines so far", createResp.Name, len(eventLines))
+		case line, ok := <-eventLines:
+			if !ok {
+				t.Fatalf("SSE stream closed before city.ready for %q arrived", createResp.Name)
+			}
+			// SSE "data:" lines carry JSON envelopes. Ignore
+			// heartbeats, comments, framing lines.
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data: ")
+			var env struct {
+				Type    string `json:"type"`
+				Subject string `json:"subject"`
+			}
+			if err := json.Unmarshal([]byte(payload), &env); err != nil {
+				continue
+			}
+			if env.Subject != createResp.Name {
+				continue
+			}
+			switch env.Type {
+			case "city.ready":
+				t.Logf("received city.ready for %q — async contract satisfied", createResp.Name)
+				return
+			case "city.init_failed":
+				t.Fatalf("received city.init_failed for %q: %s", createResp.Name, payload)
+			}
+		}
+	}
+}
+
+// readSSEFrames scans a text/event-stream body line-by-line and ships
+// each line to out. Returns when the underlying reader closes (EOF or
+// connection drop). The channel is closed to signal "no more frames".
+func readSSEFrames(body io.ReadCloser, out chan<- string) {
+	defer close(out)
+	buf := make([]byte, 0, 4096)
+	chunk := make([]byte, 4096)
+	for {
+		n, err := body.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			for {
+				i := strings.IndexByte(string(buf), '\n')
+				if i < 0 {
+					break
+				}
+				line := strings.TrimRight(string(buf[:i]), "\r")
+				buf = buf[i+1:]
+				out <- line
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
