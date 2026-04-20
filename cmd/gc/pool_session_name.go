@@ -47,6 +47,7 @@ func releaseOrphanedPoolAssignments(
 	cfg *config.City,
 	openSessionBeads []beads.Bead,
 	assignedWorkBeads []beads.Bead,
+	assignedWorkStores map[string]beads.Store,
 ) []string {
 	if store == nil || cfg == nil || len(assignedWorkBeads) == 0 {
 		return nil
@@ -97,15 +98,29 @@ func releaseOrphanedPoolAssignments(
 		}
 		seen[wb.ID] = struct{}{}
 
-		if err := store.Update(wb.ID, beads.UpdateOpts{
-			Assignee: stringPtr(""),
-			Status:   stringPtr("open"),
-		}); err != nil {
+		ownerStore := store
+		if assignedWorkStores != nil {
+			if s, ok := assignedWorkStores[wb.ID]; ok {
+				ownerStore = s
+			}
+		}
+		if !releaseOrphanedPoolAssignment(ownerStore, wb.ID) {
 			continue
 		}
 		released = append(released, wb.ID)
 	}
 	return released
+}
+
+func releaseOrphanedPoolAssignment(store beads.Store, id string) bool {
+	if store == nil || id == "" {
+		return false
+	}
+	opts := beads.UpdateOpts{
+		Assignee: stringPtr(""),
+		Status:   stringPtr("open"),
+	}
+	return store.Update(id, opts) == nil
 }
 
 func assigneePreservesNamedSessionRoute(cfg *config.City, template, assignee string) bool {

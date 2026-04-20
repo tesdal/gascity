@@ -153,6 +153,43 @@ func TestCollectAssignedWorkBeads_ExcludesSessionBeads(t *testing.T) {
 	}
 }
 
+func TestCollectAssignedWorkBeadsWithStores_TracksRigStore(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	work, err := rigStore.Create(beads.Bead{
+		Title:    "assigned rig work",
+		Type:     "task",
+		Assignee: "worker-dead",
+		Metadata: map[string]string{"gc.routed_to": "worker"},
+	})
+	if err != nil {
+		t.Fatalf("create rig work bead: %v", err)
+	}
+	if err := rigStore.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("set rig work in_progress: %v", err)
+	}
+	work, err = rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("reload rig work bead: %v", err)
+	}
+
+	got, stores, partial := collectAssignedWorkBeadsWithStores(
+		&config.City{Rigs: []config.Rig{{Name: "repo", Path: "/repo"}}},
+		cityStore,
+		map[string]beads.Store{"repo": rigStore},
+		nil,
+	)
+	if partial {
+		t.Fatal("partial = true, want false")
+	}
+	if len(got) != 1 || got[0].ID != work.ID {
+		t.Fatalf("collectAssignedWorkBeadsWithStores returned %#v, want [%s]", got, work.ID)
+	}
+	if stores[work.ID] != rigStore {
+		t.Fatalf("store for %s = %#v, want rig store", work.ID, stores[work.ID])
+	}
+}
+
 func TestBuildDesiredState_UsesAgentHookOverride(t *testing.T) {
 	cityPath := t.TempDir()
 	cfg := &config.City{

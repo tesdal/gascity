@@ -1103,8 +1103,9 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	if sessionBeads == nil {
 		sessionBeads = cr.loadSessionBeadSnapshot()
 	}
+	rigStores := cr.rigBeadStores()
 	assignedWorkBeads := result.AssignedWorkBeads
-	if released := releaseOrphanedPoolAssignments(store, cr.cfg, sessionBeads.Open(), assignedWorkBeads); len(released) > 0 {
+	if released := releaseOrphanedPoolAssignments(store, cr.cfg, sessionBeads.Open(), assignedWorkBeads, result.AssignedWorkStores); len(released) > 0 {
 		releasedSet := make(map[string]struct{}, len(released))
 		for _, id := range released {
 			releasedSet[id] = struct{}{}
@@ -1146,7 +1147,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	}
 	if sweepUndesiredPoolSessionBeads(
 		store,
-		cr.rigBeadStores(),
+		rigStores,
 		sessionBeads,
 		desiredState,
 		cr.cfg,
@@ -1255,7 +1256,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	reconcileSessionBeadsTraced(
 		ctx, cr.cityPath, open, desiredState, cfgNames, cr.cfg, cr.sp, store,
 		cr.dops,
-		assignedWorkBeads, cr.rigBeadStores(), readyWaitSet, cr.sessionDrains, poolDesired,
+		assignedWorkBeads, rigStores, readyWaitSet, cr.sessionDrains, poolDesired,
 		result.StoreQueryPartial,
 		workSet, cityName,
 		cr.it, clock.Real{}, cr.rec, cr.cfg.Session.StartupTimeoutDuration(),
