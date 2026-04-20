@@ -2,11 +2,13 @@
 package packman
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/gastownhall/gascity/internal/config"
 )
@@ -38,23 +40,49 @@ func RepoCachePath(source, commit string) (string, error) {
 	return filepath.Join(root, RepoCacheKey(source, commit)), nil
 }
 
-// EnsureRepoInCache clones and checks out the requested commit when absent.
+// EnsureRepoInCache clones and checks out the requested commit when absent,
+// or repairs an existing cache whose checkout has drifted from the lock entry.
 func EnsureRepoInCache(source, commit string) (string, error) {
 	parsed := normalizeRemoteSource(source)
 	cachePath, err := RepoCachePath(source, commit)
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(cachePath, ".git")); err == nil {
-		return cachePath, nil
-	}
-
 	root, err := RepoCacheRoot()
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("creating repo cache root: %w", err)
+	}
+	return withRepoCacheWriteLock(root, func() (string, error) {
+		return ensureRepoInCacheLocked(source, commit, parsed, cachePath)
+	})
+}
+
+func ensureRepoInCacheLocked(source, commit string, parsed remoteSource, cachePath string) (string, error) {
+	if _, err := os.Stat(filepath.Join(cachePath, ".git")); err == nil {
+		if err := checkoutExistingCache(cachePath, commit); err == nil {
+			if err := validateCachedPackRoot(source, cachePath); err != nil {
+				if removeErr := os.RemoveAll(cachePath); removeErr != nil {
+					return "", fmt.Errorf("removing invalid repo cache %q after %v: %w", cachePath, err, removeErr)
+				}
+			} else {
+				return cachePath, nil
+			}
+		} else if err := os.RemoveAll(cachePath); err != nil {
+			return "", fmt.Errorf("removing stale repo cache %q: %w", cachePath, err)
+		}
+	} else if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+		if _, statErr := os.Stat(cachePath); statErr == nil {
+			if removeErr := os.RemoveAll(cachePath); removeErr != nil {
+				return "", fmt.Errorf("removing invalid repo cache %q: %w", cachePath, removeErr)
+			}
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return "", fmt.Errorf("checking repo cache %q: %w", cachePath, statErr)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("checking repo cache %q: %w", cachePath, err)
 	}
 
 	if _, err := runGit("", "clone", "--quiet", parsed.CloneURL, cachePath); err != nil {
@@ -63,7 +91,78 @@ func EnsureRepoInCache(source, commit string) (string, error) {
 	if _, err := runGit(cachePath, "checkout", "--quiet", commit); err != nil {
 		return "", fmt.Errorf("checking out %q: %w", commit, err)
 	}
+	if err := validateCachedPackRoot(source, cachePath); err != nil {
+		return "", err
+	}
 	return cachePath, nil
+}
+
+const repoCacheLockName = ".packman-cache.lock"
+
+func withRepoCacheWriteLock(root string, fn func() (string, error)) (string, error) {
+	return withRepoCacheLock(root, syscall.LOCK_EX, fn)
+}
+
+func withRepoCacheReadLock(fn func() error) error {
+	root, err := RepoCacheRoot()
+	if err != nil {
+		return err
+	}
+	lockFile, err := os.OpenFile(filepath.Join(root, repoCacheLockName), os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fn()
+		}
+		return fmt.Errorf("opening repo cache lock: %w", err)
+	}
+	defer lockFile.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_SH); err != nil {
+		return fmt.Errorf("locking repo cache: %w", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return fn()
+}
+
+func withRepoCacheLock(root string, mode int, fn func() (string, error)) (string, error) {
+	lockFile, err := os.OpenFile(filepath.Join(root, repoCacheLockName), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("opening repo cache lock: %w", err)
+	}
+	defer lockFile.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lockFile.Fd()), mode); err != nil {
+		return "", fmt.Errorf("locking repo cache: %w", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return fn()
+}
+
+func checkoutExistingCache(cachePath, commit string) error {
+	head, headErr := runGit(cachePath, "rev-parse", "HEAD")
+	if headErr == nil && sameCommit(head, commit) {
+		return nil
+	}
+	if _, err := runGit(cachePath, "checkout", "--quiet", commit); err != nil {
+		if headErr != nil {
+			return fmt.Errorf("reading cached repo HEAD: %w; checking out %q: %v", headErr, commit, err)
+		}
+		return fmt.Errorf("checking out %q in cached repo: %w", commit, err)
+	}
+	return nil
+}
+
+func validateCachedPackRoot(source, cachePath string) error {
+	packPath := filepath.Join(cachedPackDir(source, cachePath), "pack.toml")
+	st, err := os.Stat(packPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("cached pack %q is missing pack.toml at %s", source, packPath)
+		}
+		return fmt.Errorf("checking cached pack %q at %s: %w", source, packPath, err)
+	}
+	if st.IsDir() {
+		return fmt.Errorf("cached pack %q has directory where pack.toml is expected at %s", source, packPath)
+	}
+	return nil
 }
 
 type remoteSource struct {

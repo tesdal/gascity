@@ -670,6 +670,103 @@ func TestDoImportInstallWithNoImportsSucceeds(t *testing.T) {
 	}
 }
 
+func TestDoImportCheckReportsOKForInstalledImports(t *testing.T) {
+	clearGCEnv(t)
+	dir := t.TempDir()
+	writeCityToml(t, dir, `
+[workspace]
+name = "demo"
+
+[[rigs]]
+name = "frontend"
+path = "frontend"
+
+[rigs.imports.ui]
+source = "https://example.com/ui.git"
+version = "^2.0"
+`)
+	writePackToml(t, dir, `[pack]
+name = "demo"
+schema = 1
+
+[imports.tools]
+source = "https://example.com/tools.git"
+version = "^1.0"
+`)
+
+	prevCheck := checkInstalledImports
+	t.Cleanup(func() { checkInstalledImports = prevCheck })
+	checkInstalledImports = func(cityRoot string, imports map[string]config.Import) (*packman.CheckReport, error) {
+		if cityRoot != dir {
+			t.Fatalf("cityRoot = %q, want %q", cityRoot, dir)
+		}
+		for _, name := range []string{"pack:tools", "rig:frontend:ui"} {
+			if _, ok := imports[name]; !ok {
+				t.Fatalf("imports = %#v, want %s", imports, name)
+			}
+		}
+		return &packman.CheckReport{CheckedSources: 2}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doImportCheck(dir, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Import state OK: 2 remote import(s) checked") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestDoImportCheckPrintsIssueDetails(t *testing.T) {
+	clearGCEnv(t)
+	dir := t.TempDir()
+	writeCityToml(t, dir, "[workspace]\nname = \"demo\"\n")
+	writePackToml(t, dir, `[pack]
+name = "demo"
+schema = 1
+
+[imports.tools]
+source = "https://example.com/tools.git"
+version = "^1.0"
+`)
+
+	prevCheck := checkInstalledImports
+	t.Cleanup(func() { checkInstalledImports = prevCheck })
+	checkInstalledImports = func(_ string, _ map[string]config.Import) (*packman.CheckReport, error) {
+		return &packman.CheckReport{
+			CheckedSources: 1,
+			Issues: []packman.CheckIssue{{
+				Severity:   packman.CheckSeverityError,
+				Code:       "missing-cache",
+				ImportName: "pack:tools",
+				Source:     "https://example.com/tools.git",
+				Commit:     "abc123",
+				Path:       filepath.Join(dir, ".gc", "cache", "repos", "abc"),
+				Message:    "locked import is missing from the local repo cache",
+				RepairHint: `run "gc import install"`,
+			}},
+		}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doImportCheck(dir, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Import state has 1 issue(s):",
+		"[error] missing-cache pack:tools",
+		"locked import is missing from the local repo cache",
+		`repair: run "gc import install"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q:\n%s\nstderr:\n%s", want, out, stderr.String())
+		}
+	}
+}
+
 func TestDoImportUpgradeTargetedMergesPreservedImports(t *testing.T) {
 	clearGCEnv(t)
 	dir := t.TempDir()

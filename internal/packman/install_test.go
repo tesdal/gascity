@@ -16,6 +16,7 @@ func TestSyncLockFromLockWalksTransitiveImports(t *testing.T) {
 	home := t.TempDir()
 	city := t.TempDir()
 	t.Setenv("HOME", home)
+	stubCachedPackGit(t)
 
 	lock := &Lockfile{
 		Packs: map[string]LockedPack{
@@ -57,6 +58,7 @@ func TestSyncLockHonorsTransitiveFalse(t *testing.T) {
 	home := t.TempDir()
 	city := t.TempDir()
 	t.Setenv("HOME", home)
+	stubCachedPackGit(t)
 
 	lock := &Lockfile{
 		Packs: map[string]LockedPack{
@@ -91,6 +93,49 @@ schema = 1
 	}
 	if len(got.Packs) != 1 {
 		t.Fatalf("len(Packs) = %d, want 1", len(got.Packs))
+	}
+}
+
+func TestSyncLockExpandsRepeatedSourceWhenAnyImportIsTransitive(t *testing.T) {
+	home := t.TempDir()
+	city := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCachedPackGit(t)
+
+	lock := &Lockfile{
+		Packs: map[string]LockedPack{
+			"https://example.com/shared.git": {Version: "1.0.0", Commit: "aaaa", Fetched: time.Unix(10, 0).UTC()},
+			"https://example.com/inner.git":  {Version: "1.0.0", Commit: "bbbb", Fetched: time.Unix(20, 0).UTC()},
+		},
+	}
+	if err := WriteLockfile(fsys.OSFS{}, city, lock); err != nil {
+		t.Fatalf("WriteLockfile: %v", err)
+	}
+	stageCachedPack(t, "https://example.com/shared.git", "aaaa", `
+[pack]
+name = "shared"
+schema = 1
+
+[imports.inner]
+source = "https://example.com/inner.git"
+version = "^1.0"
+`)
+	stageCachedPack(t, "https://example.com/inner.git", "bbbb", `
+[pack]
+name = "inner"
+schema = 1
+`)
+
+	transitiveFalse := false
+	got, err := SyncLock(city, map[string]config.Import{
+		"a": {Source: "https://example.com/shared.git", Version: "^1.0", Transitive: &transitiveFalse},
+		"z": {Source: "https://example.com/shared.git", Version: "^1.0"},
+	}, InstallFromLock)
+	if err != nil {
+		t.Fatalf("SyncLock: %v", err)
+	}
+	if len(got.Packs) != 2 {
+		t.Fatalf("len(Packs) = %d, want 2", len(got.Packs))
 	}
 }
 
@@ -158,6 +203,9 @@ func TestInstallLockedEnsuresEveryLockedRepo(t *testing.T) {
 		case "clone":
 			target := args[len(args)-1]
 			if err := os.MkdirAll(filepath.Join(target, ".git"), 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(target, "pack.toml"), []byte("[pack]\nname = \"cached\"\nschema = 1\n"), 0o644); err != nil {
 				return "", err
 			}
 			seen = append(seen, args[len(args)-2])
@@ -321,6 +369,7 @@ func TestSyncLockMergesDirectAndTransitiveConstraintsBeforeResolution(t *testing
 	home := t.TempDir()
 	city := t.TempDir()
 	t.Setenv("HOME", home)
+	stubCachedPackGit(t)
 
 	if err := WriteLockfile(fsys.OSFS{}, city, &Lockfile{
 		Schema: LockfileSchema,
@@ -435,6 +484,7 @@ func TestSyncLockConvergesForDeepTransitiveChains(t *testing.T) {
 	home := t.TempDir()
 	city := t.TempDir()
 	t.Setenv("HOME", home)
+	stubCachedPackGit(t)
 
 	lock := &Lockfile{
 		Schema: LockfileSchema,
@@ -538,6 +588,7 @@ func stageCachedPack(t *testing.T, source, commit, packToml string) {
 	if err := os.MkdirAll(filepath.Join(path, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
+	writeCachedPackCommit(t, path, commit)
 	if err := os.WriteFile(filepath.Join(path, "pack.toml"), []byte(packToml), 0o644); err != nil {
 		t.Fatalf("WriteFile(pack.toml): %v", err)
 	}

@@ -223,10 +223,9 @@ func (s *syncState) walkImport(_ string, imp config.Import, constraints map[stri
 	if !ok || !matchesExisting(chosen, mergedConstraint) {
 		*dirty = true
 	}
-	if seen[imp.Source] || !ok {
+	if !ok {
 		return nil
 	}
-	seen[imp.Source] = true
 
 	cachePath, err := s.cachedPackPath(imp.Source, chosen.Commit)
 	if err != nil {
@@ -235,6 +234,10 @@ func (s *syncState) walkImport(_ string, imp config.Import, constraints map[stri
 	if !imp.ImportIsTransitive() {
 		return nil
 	}
+	if seen[imp.Source] {
+		return nil
+	}
+	seen[imp.Source] = true
 
 	nested, err := readPackImports(cachePath)
 	if err != nil {

@@ -23,6 +23,7 @@ var (
 	syncImports             = packman.SyncLock
 	syncImportsSelective    = packman.SyncLockSelectiveUpgrade
 	installLockedImports    = packman.InstallLocked
+	checkInstalledImports   = packman.CheckInstalled
 	readImportLockfile      = packman.ReadLockfile
 	writeImportLockfile     = packman.WriteLockfile
 	resolveImportVersion    = packman.ResolveVersion
@@ -84,6 +85,7 @@ func newImportCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(
 		newImportAddCmd(stdout, stderr),
 		newImportRemoveCmd(stdout, stderr),
+		newImportCheckCmd(stdout, stderr),
 		newImportInstallCmd(stdout, stderr),
 		newImportUpgradeCmd(stdout, stderr),
 		newImportListCmd(stdout, stderr),
@@ -128,6 +130,25 @@ func newImportRemoveCmd(stdout, stderr io.Writer) *cobra.Command {
 				return errExit
 			}
 			if doImportRemove(fsys.OSFS{}, cityPath, args[0], stdout, stderr) != 0 {
+				return errExit
+			}
+			return nil
+		},
+	}
+}
+
+func newImportCheckCmd(stdout, stderr io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "check",
+		Short: "Validate installed pack import state",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cityPath, err := resolveImportRoot()
+			if err != nil {
+				fmt.Fprintf(stderr, "gc import check: %v\n", err) //nolint:errcheck
+				return errExit
+			}
+			if doImportCheck(cityPath, stdout, stderr) != 0 {
 				return errExit
 			}
 			return nil
@@ -530,6 +551,52 @@ func doImportInstall(cityPath string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Installed %d remote import(s)\n", len(lock.Packs)) //nolint:errcheck
 	return 0
+}
+
+func doImportCheck(cityPath string, stdout, stderr io.Writer) int {
+	allImports, err := collectAllImportsFS(fsys.OSFS{}, cityPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc import check: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	report, err := checkInstalledImports(cityPath, allImports)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc import check: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if !report.HasIssues() {
+		fmt.Fprintf(stdout, "Import state OK: %d remote import(s) checked\n", report.CheckedSources) //nolint:errcheck
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "Import state has %d issue(s):\n", len(report.Issues)) //nolint:errcheck
+	writeImportCheckIssues(stdout, report.Issues)
+	return 1
+}
+
+func writeImportCheckIssues(w io.Writer, issues []packman.CheckIssue) {
+	for _, issue := range issues {
+		fmt.Fprintf(w, "  [%s] %s", issue.Severity, issue.Code) //nolint:errcheck
+		if issue.ImportName != "" {
+			fmt.Fprintf(w, " %s", issue.ImportName) //nolint:errcheck
+		}
+		if issue.Source != "" {
+			fmt.Fprintf(w, " (%s)", issue.Source) //nolint:errcheck
+		}
+		fmt.Fprintf(w, "\n") //nolint:errcheck
+		if issue.Message != "" {
+			fmt.Fprintf(w, "      issue: %s\n", issue.Message) //nolint:errcheck
+		}
+		if issue.Commit != "" {
+			fmt.Fprintf(w, "      commit: %s\n", issue.Commit) //nolint:errcheck
+		}
+		if issue.Path != "" {
+			fmt.Fprintf(w, "      path: %s\n", issue.Path) //nolint:errcheck
+		}
+		if issue.RepairHint != "" {
+			fmt.Fprintf(w, "      repair: %s\n", issue.RepairHint) //nolint:errcheck
+		}
+	}
 }
 
 func doImportUpgrade(cityPath, target string, stdout, stderr io.Writer) int {

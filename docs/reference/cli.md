@@ -1028,6 +1028,7 @@ gc import
 | Subcommand | Description |
 |------------|-------------|
 | [gc import add](#gc-import-add) | Add a pack import |
+| [gc import check](#gc-import-check) | Validate installed pack import state |
 | [gc import install](#gc-import-install) | Install imports from pack.toml and packs.lock |
 | [gc import list](#gc-import-list) | List imported packs |
 | [gc import migrate](#gc-import-migrate) | Migrate a V1 city layout to the V2 pack shape |
@@ -1047,6 +1048,14 @@ gc import add <source> [flags]
 |------|------|---------|-------------|
 | `--name` | string |  | Local binding name override |
 | `--version` | string |  | Version constraint for git-backed imports |
+
+## gc import check
+
+Validate installed pack import state
+
+```
+gc import check
+```
 
 ## gc import install
 
