@@ -1437,6 +1437,18 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		fmt.Fprintf(cr.stderr, "%s: dispatching wait nudges: %v\n", cr.logPrefix, err) //nolint:errcheck
 	}
 
+	// Drain queued nudges for ACP sessions in-process. The nudge
+	// poller (gc nudge poll) skips ACP sessions because it spawns a
+	// separate process without in-process ACP connections. The
+	// reconciler runs inside the supervisor and holds the live
+	// provider, so it can deliver directly.
+	acpTargets := buildACPNudgeTargets(cr.cityPath, cr.cfg, result, sessionBeads)
+	if len(acpTargets) > 0 {
+		if _, err := drainACPQueuedNudges(cr.cityPath, cr.sp, acpTargets, time.Now()); err != nil {
+			fmt.Fprintf(cr.stderr, "%s: draining ACP nudges: %v\n", cr.logPrefix, err) //nolint:errcheck
+		}
+	}
+
 	// Idle recovery: detect pool sessions stuck at the prompt after
 }
 
