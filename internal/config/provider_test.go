@@ -191,6 +191,22 @@ func TestBuiltinProvidersOpenCodePromptModeRegression(t *testing.T) {
 	}
 }
 
+// TestBuiltinProvidersCopilotPromptModeRegression guards against reverting
+// Copilot to argv-based prompt delivery. GitHub Copilot CLI 1.0+ rejects
+// positional prompt arguments, and `--prompt`/`-p` runs non-interactively and
+// exits after one turn, which breaks gc's long-lived tmux session model. The
+// interactive-mode flag `-i` starts a persistent session and accepts the
+// startup prompt in one argv.
+func TestBuiltinProvidersCopilotPromptModeRegression(t *testing.T) {
+	p := BuiltinProviders()["copilot"]
+	if p.PromptMode != "flag" {
+		t.Fatalf("PromptMode = %q, want \"flag\" — Copilot 1.0+ rejects positional prompt argv", p.PromptMode)
+	}
+	if p.PromptFlag != "-i" {
+		t.Fatalf("PromptFlag = %q, want \"-i\" — Copilot `--prompt`/`-p` is non-interactive and exits after one turn", p.PromptFlag)
+	}
+}
+
 func TestBuiltinProviderOrderReturnsNewSlice(t *testing.T) {
 	a := BuiltinProviderOrder()
 	b := BuiltinProviderOrder()
