@@ -80,7 +80,11 @@ func drainACPQueuedNudges(
 		// matching the poller path (tryDeliverQueuedNudgesByPoller).
 		handle, err := workerHandleForNudgeTarget(target, store, sp)
 		if err != nil {
-			return totalDelivered, fmt.Errorf("worker handle for %s: %w", target.sessionName, err)
+			telemetry.RecordNudge(context.Background(), target.agentKey(), err)
+			if recErr := recordQueuedNudgeFailure(cityPath, queuedNudgeIDs(items), err, now); recErr != nil {
+				return totalDelivered, fmt.Errorf("recording ACP handle failure: %w", recErr)
+			}
+			continue
 		}
 		result, err := handle.Nudge(context.Background(), worker.NudgeRequest{
 			Text:     msg,

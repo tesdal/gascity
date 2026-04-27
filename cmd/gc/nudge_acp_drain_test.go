@@ -52,6 +52,20 @@ func TestDrainACPQueuedNudges_DeliversDueNudge(t *testing.T) {
 		t.Errorf("delivered = %d, want 1", delivered)
 	}
 
+	// Verify exactly one Nudge call was made with the queued message.
+	var nudgeCalled bool
+	for _, c := range sp.Calls {
+		if c.Method == "Nudge" && c.Name == "hermes--polecat" {
+			nudgeCalled = true
+			if !strings.Contains(c.Message, "hello from queue") {
+				t.Errorf("Nudge message = %q, want to contain 'hello from queue'", c.Message)
+			}
+		}
+	}
+	if !nudgeCalled {
+		t.Error("no Nudge call recorded — delivery did not happen")
+	}
+
 	// Verify nudge removed from both pending and in_flight (acked).
 	var remaining nudgequeue.State
 	if err := nudgequeue.WithState(cityPath, func(s *nudgequeue.State) error {
@@ -103,6 +117,27 @@ func TestDrainACPQueuedNudges_SkipsNotYetDue(t *testing.T) {
 	}
 	if delivered != 0 {
 		t.Errorf("delivered = %d, want 0 (not yet due)", delivered)
+	}
+
+	// Nudge should still be pending — not claimed or delivered.
+	var remaining nudgequeue.State
+	if err := nudgequeue.WithState(cityPath, func(s *nudgequeue.State) error {
+		remaining = *s
+		return nil
+	}); err != nil {
+		t.Fatalf("WithState: %v", err)
+	}
+	if len(remaining.Pending) != 1 {
+		t.Errorf("pending = %d, want 1 (not yet due)", len(remaining.Pending))
+	}
+	if len(remaining.InFlight) != 0 {
+		t.Errorf("in_flight = %d, want 0", len(remaining.InFlight))
+	}
+	// No Nudge calls should have been made.
+	for _, c := range sp.Calls {
+		if c.Method == "Nudge" {
+			t.Errorf("unexpected Nudge call for not-yet-due nudge: %v", c)
+		}
 	}
 }
 
@@ -212,6 +247,12 @@ func TestDrainACPQueuedNudges_SessionNotRunning_Skipped(t *testing.T) {
 	}
 	if len(remaining.Pending) != 1 {
 		t.Errorf("pending = %d, want 1 (left for next tick)", len(remaining.Pending))
+	}
+	// No Nudge calls — session not running means we skip entirely.
+	for _, c := range sp.Calls {
+		if c.Method == "Nudge" {
+			t.Errorf("unexpected Nudge call for non-running session: %v", c)
+		}
 	}
 }
 
@@ -338,12 +379,46 @@ func TestDrainACPQueuedNudges_BatchesMultipleNudges(t *testing.T) {
 func TestDrainACPQueuedNudges_NoTargets(t *testing.T) {
 	cityPath := t.TempDir()
 	sp := runtime.NewFake()
-	delivered, err := drainACPQueuedNudges(cityPath, sp, nil, time.Now())
+
+	now := time.Now()
+	if err := nudgequeue.WithState(cityPath, func(s *nudgequeue.State) error {
+		s.Pending = append(s.Pending, nudgequeue.Item{
+			ID:           "nudge-orphan",
+			Agent:        "hermes/polecat",
+			Message:      "should stay",
+			Source:       "session",
+			CreatedAt:    now.Add(-1 * time.Second),
+			DeliverAfter: now.Add(-1 * time.Second),
+			ExpiresAt:    now.Add(24 * time.Hour),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("WithState: %v", err)
+	}
+
+	delivered, err := drainACPQueuedNudges(cityPath, sp, nil, now)
 	if err != nil {
 		t.Fatalf("drainACPQueuedNudges: %v", err)
 	}
 	if delivered != 0 {
 		t.Errorf("delivered = %d, want 0", delivered)
+	}
+
+	// Queue should be untouched.
+	var remaining nudgequeue.State
+	if err := nudgequeue.WithState(cityPath, func(s *nudgequeue.State) error {
+		remaining = *s
+		return nil
+	}); err != nil {
+		t.Fatalf("WithState: %v", err)
+	}
+	if len(remaining.Pending) != 1 {
+		t.Errorf("pending = %d, want 1 (untouched)", len(remaining.Pending))
+	}
+	for _, c := range sp.Calls {
+		if c.Method == "Nudge" {
+			t.Errorf("unexpected Nudge call: %v", c)
+		}
 	}
 }
 
@@ -417,6 +492,15 @@ func TestBuildACPNudgeTargets_NoSessionBead(t *testing.T) {
 	}
 	if targets[0].continuationEpoch != "" {
 		t.Errorf("continuationEpoch = %q, want empty (no bead)", targets[0].continuationEpoch)
+	}
+	if targets[0].sessionName != "hermes--polecat" {
+		t.Errorf("sessionName = %q, want hermes--polecat", targets[0].sessionName)
+	}
+	if targets[0].alias != "hermes/polecat" {
+		t.Errorf("alias = %q, want hermes/polecat", targets[0].alias)
+	}
+	if targets[0].transport != "acp" {
+		t.Errorf("transport = %q, want acp", targets[0].transport)
 	}
 }
 
@@ -561,6 +645,9 @@ func TestDrainACPQueuedNudges_SessionStopsBeforeDelivery_NotAcked(t *testing.T) 
 	delivered, err := drainACPQueuedNudges(cityPath, sp, targets, now)
 	if err != nil {
 		t.Fatalf("drainACPQueuedNudges: %v", err)
+	}
+	if !sp.stopped {
+		t.Error("stoppingProvider did not trigger — race path was not exercised")
 	}
 	if delivered != 0 {
 		t.Errorf("delivered = %d, want 0 (session stopped before delivery)", delivered)
@@ -829,6 +916,16 @@ func TestResolveAgentForNudge_CandidatePriority(t *testing.T) {
 	})
 	if got.Name != "owl" {
 		t.Errorf("Name = %q, want owl (TemplateName fallback)", got.Name)
+	}
+
+	// Falls through to Alias when InstanceName and TemplateName don't match.
+	got = resolveAgentForNudge(cfg, TemplateParams{
+		InstanceName: "nonexistent/thing",
+		TemplateName: "also-nonexistent",
+		Alias:        "hermes/polecat",
+	})
+	if got.Name != "polecat" {
+		t.Errorf("Name = %q, want polecat (Alias fallback)", got.Name)
 	}
 
 	// Returns empty when nothing matches.
