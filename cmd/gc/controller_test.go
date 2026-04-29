@@ -571,10 +571,13 @@ func TestControllerReloadsConfigImmediatelyOnWatchEvent(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
+	before := reconcileCount.Load()
 	writeCityTOML(t, dir, "test", "mayor", "worker")
 
+	// Wait for "Config reloaded" AND at least one reconcile after
+	// the reload so that buildFn has run with the new config.
 	deadline := time.After(5 * time.Second)
-	for !strings.Contains(stdout.String(), "Config reloaded") {
+	for !strings.Contains(stdout.String(), "Config reloaded") || reconcileCount.Load() <= before {
 		select {
 		case <-deadline:
 			t.Fatalf("timed out waiting for immediate config reload; reconciles=%d stdout=%q stderr=%q",
