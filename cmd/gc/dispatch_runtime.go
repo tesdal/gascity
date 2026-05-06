@@ -237,8 +237,8 @@ func drainWorkflowServeWork(agentCfg config.Agent, cityPath, storePath, workQuer
 			beadID := candidate.ID
 			kind := strings.TrimSpace(candidate.Metadata["gc.kind"])
 			if !isControlDispatcherKind(kind) {
-				workflowTracef("serve unexpected-kind bead=%s kind=%s", beadID, kind)
-				return result, fmt.Errorf("bead %s has unexpected non-control kind %q", beadID, kind)
+				workflowTracef("serve skip-unexpected-kind bead=%s kind=%q", beadID, kind)
+				continue
 			}
 			workflowTracef("serve process bead=%s kind=%s store=%s", beadID, kind, storePath)
 			// controlDispatcherServe currently returns nil both when it
