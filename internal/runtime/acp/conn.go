@@ -128,22 +128,37 @@ func (sc *sessionConn) dispatch(msg JSONRPCMessage) {
 func (sc *sessionConn) handleUpdate(msg JSONRPCMessage) {
 	var params SessionUpdateParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		fmt.Fprintf(os.Stderr, "acp: session/update unmarshal: %v\n", err)
 		return
 	}
 
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-
 	sc.lastActivity = time.Now()
-	for _, block := range params.Content {
-		if block.Type != "text" || block.Text == "" {
-			continue
+
+	switch params.Update.Type {
+	case "agent_message_chunk", "user_message_chunk", "agent_thought_chunk":
+		// ContentChunk: content is a single ContentBlock object
+		var block ContentBlock
+		if err := json.Unmarshal(params.Update.Content, &block); err == nil {
+			if block.Type == "text" && block.Text != "" {
+				lines := strings.Split(block.Text, "\n")
+				for _, line := range lines {
+					sc.appendLine(line)
+				}
+			}
 		}
-		// Split multi-line text into individual lines for the buffer.
-		lines := strings.Split(block.Text, "\n")
-		for _, line := range lines {
-			sc.appendLine(line)
+	case "tool_call", "tool_call_update":
+		// ToolCall/ToolCallUpdate: title field is at the update level
+		if params.Update.Title != "" {
+			sc.appendLine("[tool: " + params.Update.Title + "]")
 		}
+	case "session_info_update":
+		if params.Update.Title != "" {
+			sc.appendLine("[title: " + params.Update.Title + "]")
+		}
+	default:
+		// Unknown variant — lastActivity already updated above
 	}
 }
 

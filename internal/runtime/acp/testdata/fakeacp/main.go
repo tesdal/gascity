@@ -103,7 +103,10 @@ func main() {
 				}
 				notify("session/update", map[string]any{
 					"sessionId": sessionID,
-					"content":   []contentBlock{{Type: "text", Text: "echo: " + text}},
+					"update": map[string]any{
+						"sessionUpdate": "agent_message_chunk",
+						"content":       map[string]any{"type": "text", "text": "echo: " + text},
+					},
 				})
 			}
 			respond(msg.ID, map[string]any{})

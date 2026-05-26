@@ -147,10 +147,20 @@ type SessionPromptParams struct {
 	Prompt    []ContentBlock `json:"prompt"`
 }
 
-// SessionUpdateParams is the params for "session/update" notifications.
+// SessionUpdateParams is the params for "session/update" notifications (ACP spec v0.16.1).
 type SessionUpdateParams struct {
-	SessionID string         `json:"sessionId"`
-	Content   []ContentBlock `json:"content"`
+	SessionID string               `json:"sessionId"`
+	Update    SessionUpdateContent `json:"update"`
+}
+
+// SessionUpdateContent is the ACP spec discriminated union for session updates.
+// The Type field ("sessionUpdate") determines which other fields are populated.
+// Content is RawMessage because its schema varies by type (object for ContentChunk,
+// array for ToolCall/ToolCallUpdate).
+type SessionUpdateContent struct {
+	Type    string          `json:"sessionUpdate"`
+	Content json.RawMessage `json:"content,omitempty"`
+	Title   string          `json:"title,omitempty"`
 }
 
 // newRequest creates a JSON-RPC request with a unique ID.
