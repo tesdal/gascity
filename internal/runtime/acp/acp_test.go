@@ -672,13 +672,37 @@ func TestHandleUpdate_Variants(t *testing.T) {
 			wantActive: true,
 		},
 		{
-			name: "tool_call_update with title",
+			name: "agent_message_chunk with multiline text",
+			update: map[string]any{
+				"sessionUpdate": "agent_message_chunk",
+				"content":       map[string]any{"type": "text", "text": "line1\nline2\nline3"},
+			},
+			wantOutput: "line1\nline2\nline3",
+			wantActive: true,
+		},
+		{
+			name: "tool_call_update with title and content",
 			update: map[string]any{
 				"sessionUpdate": "tool_call_update",
 				"title":         "Bash",
-				"content":       []map[string]any{{"type": "text", "text": "output"}},
+				"content": []map[string]any{{
+					"type":    "content",
+					"content": map[string]any{"type": "text", "text": "output"},
+				}},
 			},
-			wantOutput: "[tool: Bash]",
+			wantOutput: "[tool: Bash]\noutput",
+			wantActive: true,
+		},
+		{
+			name: "tool_call content without title",
+			update: map[string]any{
+				"sessionUpdate": "tool_call",
+				"content": []map[string]any{{
+					"type":    "content",
+					"content": map[string]any{"type": "text", "text": "first\nsecond"},
+				}},
+			},
+			wantOutput: "first\nsecond",
 			wantActive: true,
 		},
 		{
@@ -747,6 +771,30 @@ func TestHandleUpdate_Variants(t *testing.T) {
 				t.Error("lastActivity should be set")
 			}
 		})
+	}
+}
+
+func TestHandleUpdate_LegacyContentFallback(t *testing.T) {
+	sc := &sessionConn{outputBufMax: 100}
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": "s1",
+		"content": []map[string]any{{
+			"type": "text",
+			"text": "legacy line1\nlegacy line2",
+		}},
+	})
+	sc.dispatch(JSONRPCMessage{
+		JSONRPC: "2.0",
+		Method:  "session/update",
+		Params:  params,
+	})
+
+	output := sc.peekLines(0)
+	if output != "legacy line1\nlegacy line2" {
+		t.Errorf("output = %q, want %q", output, "legacy line1\nlegacy line2")
+	}
+	if sc.getLastActivity().IsZero() {
+		t.Error("lastActivity should be set")
 	}
 }
 

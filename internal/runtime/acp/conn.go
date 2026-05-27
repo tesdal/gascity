@@ -138,27 +138,61 @@ func (sc *sessionConn) handleUpdate(msg JSONRPCMessage) {
 
 	switch params.Update.Type {
 	case "agent_message_chunk", "user_message_chunk", "agent_thought_chunk":
-		// ContentChunk: content is a single ContentBlock object
 		var block ContentBlock
-		if err := json.Unmarshal(params.Update.Content, &block); err == nil {
-			if block.Type == "text" && block.Text != "" {
-				lines := strings.Split(block.Text, "\n")
-				for _, line := range lines {
-					sc.appendLine(line)
-				}
-			}
+		if err := json.Unmarshal(params.Update.Content, &block); err != nil {
+			fmt.Fprintf(os.Stderr, "acp: session/update content unmarshal (variant=%s): %v\n", params.Update.Type, err)
+			return
 		}
+		sc.appendContentBlock(block)
 	case "tool_call", "tool_call_update":
-		// ToolCall/ToolCallUpdate: title field is at the update level
 		if params.Update.Title != "" {
 			sc.appendLine("[tool: " + params.Update.Title + "]")
 		}
-	case "session_info_update":
-		if params.Update.Title != "" {
-			sc.appendLine("[title: " + params.Update.Title + "]")
+		if len(params.Update.Content) > 0 {
+			sc.appendToolCallContent(params.Update.Type, params.Update.Content)
 		}
 	default:
-		// Unknown variant — lastActivity already updated above
+		if params.Update.Type == "" {
+			if len(params.Content) > 0 {
+				sc.appendContentBlocks(params.Content)
+				return
+			}
+			fmt.Fprintln(os.Stderr, "acp: session/update missing update discriminator")
+		}
+	}
+}
+
+func (sc *sessionConn) appendToolCallContent(variant string, raw json.RawMessage) {
+	var parts []toolCallContent
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		fmt.Fprintf(os.Stderr, "acp: session/update content unmarshal (variant=%s): %v\n", variant, err)
+		return
+	}
+	for _, part := range parts {
+		if part.Type != "content" {
+			continue
+		}
+		var block ContentBlock
+		if err := json.Unmarshal(part.Content, &block); err != nil {
+			fmt.Fprintf(os.Stderr, "acp: session/update tool content unmarshal (variant=%s): %v\n", variant, err)
+			continue
+		}
+		sc.appendContentBlock(block)
+	}
+}
+
+func (sc *sessionConn) appendContentBlocks(blocks []ContentBlock) {
+	for _, block := range blocks {
+		sc.appendContentBlock(block)
+	}
+}
+
+func (sc *sessionConn) appendContentBlock(block ContentBlock) {
+	if block.Type != "text" || block.Text == "" {
+		return
+	}
+	for _, line := range strings.Split(block.Text, "\n") {
+		sc.appendLine(line)
 	}
 }
 
