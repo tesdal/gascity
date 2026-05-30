@@ -14,31 +14,23 @@
     "ok": {
       "const": true
     },
-    "city_path": {
-      "type": "string"
-    },
-    "search_paths": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "formulas": {
       "type": "array",
       "items": {
         "type": "object",
         "required": [
-          "name"
+          "name",
+          "description"
         ],
         "properties": {
           "name": {
             "type": "string"
           },
-          "source": {
+          "description": {
             "type": "string"
           }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       }
     },
     "summary": {
