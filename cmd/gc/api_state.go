@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -375,9 +376,16 @@ func (cs *controllerState) startMaintenanceLoop(ctx context.Context) {
 		DiskFreeBytes:     doltContainerFreeBytesFunc,
 		DiskMinFreeBytes:  doltDiskMinFreeBytes(),
 		DiskWarnFreeBytes: doltDiskWarnFreeBytes(),
+		OpenDoltOps: supervisor.NewSQLDoltOps(func(ctx context.Context) (*sql.DB, error) {
+			port := currentResolvableManagedDoltPort(cityPath)
+			if port == "" {
+				return nil, fmt.Errorf("store-maintenance: managed dolt port not available")
+			}
+			return sql.Open("mysql", "root@tcp(127.0.0.1:"+port+")/hq")
+		}),
 	}
 	if deps.OpenDoltOps == nil || deps.OpenDoltBackup == nil {
-		fmt.Fprintln(os.Stderr, "store-maintenance: enabled in observe-only mode (snapshot and DOLT_GC not yet wired)")
+		fmt.Fprintln(os.Stderr, "store-maintenance: enabled in observe-only mode (snapshot not yet wired)")
 	}
 	loop := supervisor.NewStoreMaintenanceLoop(deps)
 	// Retain the handle so the API layer can expose
