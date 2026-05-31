@@ -38,6 +38,7 @@ func GraphApplyFor(store Store) (GraphApplyStore, bool) {
 // Keys are caller-defined stable identifiers (for example recipe step IDs).
 type GraphApplyPlan struct {
 	CommitMessage string           `json:"commit_message,omitempty"`
+	NoHistory     bool             `json:"no_history,omitempty"`
 	Nodes         []GraphApplyNode `json:"nodes"`
 	Edges         []GraphApplyEdge `json:"edges,omitempty"`
 }

@@ -218,9 +218,17 @@ type BdStore struct {
 	runner      CommandRunner   // injectable for testing
 	purgeRunner PurgeRunnerFunc // injectable for testing; nil uses exec default
 	idPrefix    string          // bead ID prefix owned by this store, without trailing "-"
+	storage     BdStoreOptions
 }
 
 const bdTransientWriteAttempts = 3
+
+// BdStoreOptions configures default storage behavior for beads created through
+// a BdStore. Explicit bead or graph flags are still honored.
+type BdStoreOptions struct {
+	Ephemeral bool
+	NoHistory bool
+}
 
 // NewBdStore creates a BdStore rooted at dir using the given runner.
 func NewBdStore(dir string, runner CommandRunner) *BdStore {
@@ -229,7 +237,20 @@ func NewBdStore(dir string, runner CommandRunner) *BdStore {
 
 // NewBdStoreWithPrefix creates a BdStore with an explicit owned bead ID prefix.
 func NewBdStoreWithPrefix(dir string, runner CommandRunner, idPrefix string) *BdStore {
-	return &BdStore{dir: dir, runner: runner, idPrefix: normalizeIDPrefix(idPrefix)}
+	return NewBdStoreWithPrefixAndOptions(dir, runner, idPrefix, BdStoreOptions{})
+}
+
+// NewBdStoreWithPrefixAndOptions creates a BdStore with an explicit owned bead
+// ID prefix and default storage behavior.
+func NewBdStoreWithPrefixAndOptions(dir string, runner CommandRunner, idPrefix string, opts BdStoreOptions) *BdStore {
+	return &BdStore{dir: dir, runner: runner, idPrefix: normalizeIDPrefix(idPrefix), storage: opts}
+}
+
+func (s *BdStore) effectiveCreateStorage(b Bead) (ephemeral bool, noHistory bool) {
+	if b.Ephemeral || b.NoHistory {
+		return b.Ephemeral, b.NoHistory
+	}
+	return s.storage.Ephemeral, s.storage.NoHistory
 }
 
 // IDPrefix returns the bead ID prefix owned by this store, without trailing "-".
@@ -679,7 +700,15 @@ func mapBdStatus(s string) string {
 
 // Create persists a new bead via bd create.
 func (s *BdStore) Create(b Bead) (Bead, error) {
-	return s.CreateWithStorage(b, StorageDefault)
+	effectiveEphemeral, effectiveNoHistory := s.effectiveCreateStorage(b)
+	switch {
+	case effectiveEphemeral:
+		return s.CreateWithStorage(b, StorageEphemeral)
+	case effectiveNoHistory:
+		return s.CreateWithStorage(b, StorageNoHistory)
+	default:
+		return s.CreateWithStorage(b, StorageDefault)
+	}
 }
 
 // CreateWithStorage persists a new bead via bd create using a storage tier
@@ -728,6 +757,9 @@ func (s *BdStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) 
 	}
 	if b.DeferUntil != nil {
 		args = append(args, "--defer", b.DeferUntil.Format(time.RFC3339))
+	}
+	if effectiveNoHistory {
+		args = append(args, "--no-history")
 	}
 	metadata := maps.Clone(b.Metadata)
 	if b.From != "" {

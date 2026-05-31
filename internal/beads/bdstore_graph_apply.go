@@ -11,7 +11,13 @@ import (
 // ApplyGraphPlan creates a bead graph via a single hidden bd command so the
 // full graph becomes visible only after the underlying transaction commits.
 func (s *BdStore) ApplyGraphPlan(ctx context.Context, plan *GraphApplyPlan) (*GraphApplyResult, error) {
-	return s.ApplyGraphPlanWithStorage(ctx, plan, StorageDefault)
+	storage := StorageDefault
+	if s.storage.Ephemeral {
+		storage = StorageEphemeral
+	} else if s.storage.NoHistory {
+		storage = StorageNoHistory
+	}
+	return s.ApplyGraphPlanWithStorage(ctx, plan, storage)
 }
 
 // ApplyGraphPlanWithStorage creates a bead graph in a storage tier selected by
