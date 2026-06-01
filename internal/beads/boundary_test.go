@@ -53,7 +53,10 @@ func TestNoBdExecOutsideBeads(t *testing.T) {
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == ".git" || base == "vendor" || base == ".claude" || strings.HasPrefix(base, ".beads-src") {
+			// Skip nested git worktrees (.worktrees/<branch>/...): they are
+			// separate checkouts of OTHER branches, not this module's source,
+			// and scanning them produces spurious cross-branch violations.
+			if base == ".git" || base == "vendor" || base == ".claude" || base == ".worktrees" || strings.HasPrefix(base, ".beads-src") {
 				return filepath.SkipDir
 			}
 			return nil

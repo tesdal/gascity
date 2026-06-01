@@ -103,12 +103,24 @@ func TestExecCommandRunnerStopsBDSlowTimerForFastBDCommand(t *testing.T) {
 	bdSlowTelemetryThreshold = 30 * time.Millisecond
 	t.Cleanup(func() { bdSlowTelemetryThreshold = oldThreshold })
 
-	exp := installBeadsRecordingLogExporter(t)
 	binDir := t.TempDir()
 	writeExecutable(t, filepath.Join(binDir, "bd"), `#!/bin/sh
 printf '[]\n'
 `)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Warm up the fake bd BEFORE installing the recording exporter. On macOS the
+	// first exec of a freshly written script pays a ~150ms Gatekeeper validation
+	// tax (see TestKillCommandTreeKillsProcessGroup below), which trips the 30ms
+	// bd.slow timer and emits a spurious record. Paying that tax here — while the
+	// recording exporter is not yet installed — means the warm-up's own bd.slow
+	// (fired against the default exporter) is never counted, and the measured
+	// exec below is a genuinely fast second exec of the same cached binary.
+	if _, err := ExecCommandRunner()(t.TempDir(), "bd", "list"); err != nil {
+		t.Fatalf("warm-up ExecCommandRunner bd: %v", err)
+	}
+
+	exp := installBeadsRecordingLogExporter(t)
 
 	if _, err := ExecCommandRunner()(t.TempDir(), "bd", "list"); err != nil {
 		t.Fatalf("ExecCommandRunner bd: %v", err)
