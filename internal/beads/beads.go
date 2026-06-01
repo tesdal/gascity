@@ -197,6 +197,20 @@ func IsReadyExcludedBead(b Bead) bool {
 	return false
 }
 
+// isControlReadyCandidate is the control-dispatcher variant of IsReadyCandidate
+// that conditionally permits ephemeral beads (Finding 1). GetReadyWork already
+// applies the server-side filters; this is a defense-in-depth post-filter that
+// must NOT drop ephemeral beads when the caller asked to include them.
+func isControlReadyCandidate(b Bead, now time.Time, includeEphemeral bool) bool {
+	if b.Status != "open" {
+		return false
+	}
+	if b.Ephemeral && !includeEphemeral {
+		return false
+	}
+	return !IsReadyExcludedBead(b) && !IsDeferred(b, now)
+}
+
 // IsDeferred reports whether a bead is hidden by a future defer_until,
 // mirroring bd ready's server-side filter (defer_until IS NULL OR <= now is
 // ready) and cmd_hook.isFutureDeferredHookCandidate.

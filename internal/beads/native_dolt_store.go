@@ -121,6 +121,8 @@ type NativeDoltStore struct {
 
 var _ Store = (*NativeDoltStore)(nil)
 
+var _ ControlReadyQuerier = (*NativeDoltStore)(nil)
+
 func newNativeDoltStoreWithStorage(storage beadslib.Storage, actor string) *NativeDoltStore {
 	if actor == "" {
 		actor = nativeDoltStoreActor
@@ -457,6 +459,66 @@ statusLoop:
 			seen[bead.ID] = true
 			beads = append(beads, bead)
 			if q.Limit > 0 && len(beads) >= q.Limit {
+				break statusLoop
+			}
+		}
+	}
+	return beads, nil
+}
+
+// ControlReady answers a single control-dispatcher ready sub-query in-process,
+// mapping ControlReadyFilter onto beadslib.WorkFilter so GetReadyWork performs
+// the unblocked/actionable/dependency filtering. Unlike Ready, it honors
+// IncludeEphemeral (Finding 1) by not re-applying the non-ephemeral post-filter.
+func (s *NativeDoltStore) ControlReady(filter ControlReadyFilter) ([]Bead, error) {
+	storage, release, err := s.acquireStorage()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	ctx, cancel := nativeDoltOperationContext(context.TODO())
+	defer cancel()
+
+	excludeTypes := make([]beadslib.IssueType, 0, len(filter.ExcludeTypes))
+	for _, t := range filter.ExcludeTypes {
+		excludeTypes = append(excludeTypes, beadslib.IssueType(t))
+	}
+
+	var beads []Bead
+	seen := make(map[string]bool)
+	now := time.Now().UTC()
+statusLoop:
+	for _, status := range nativeDoltOpenReadyStatuses {
+		wf := beadslib.WorkFilter{
+			Status:           status,
+			Unassigned:       filter.Unassigned,
+			MetadataFields:   filter.Metadata,
+			ExcludeTypes:     excludeTypes,
+			IncludeEphemeral: filter.IncludeEphemeral,
+			Limit:            filter.Limit,
+		}
+		if !filter.Unassigned && filter.Assignee != "" {
+			wf.Assignee = &filter.Assignee
+		}
+		if filter.Sort == SortCreatedAsc {
+			wf.SortPolicy = beadslib.SortPolicyOldest
+		}
+
+		issues, err := storage.GetReadyWork(ctx, wf)
+		if err != nil {
+			return nil, err
+		}
+		for _, issue := range issues {
+			bead, err := beadFromNativeIssue(issue)
+			if err != nil {
+				return nil, err
+			}
+			if seen[bead.ID] || !isControlReadyCandidate(bead, now, filter.IncludeEphemeral) {
+				continue
+			}
+			seen[bead.ID] = true
+			beads = append(beads, bead)
+			if filter.Limit > 0 && len(beads) >= filter.Limit {
 				break statusLoop
 			}
 		}
