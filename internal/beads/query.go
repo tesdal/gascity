@@ -115,6 +115,27 @@ func readyQueryFromArgs(queries []ReadyQuery) ReadyQuery {
 	return queries[0]
 }
 
+// ControlReadyFilter describes one ready sub-query for the control-dispatcher
+// in-process fast path. It is intentionally separate from ReadyQuery to avoid
+// changing the cross-store Ready contract (and to avoid adding map/slice fields
+// to ReadyQuery, which is compared by struct equality elsewhere).
+type ControlReadyFilter struct {
+	Assignee         string            // exact assignee match; ignored when Unassigned is true
+	Unassigned       bool              // match beads with no assignee (Assignee == "")
+	Metadata         map[string]string // AND-match on top-level bead metadata key=value
+	ExcludeTypes     []string          // ADDITIONAL exclusions on top of the store's built-in readyExcludeTypes
+	IncludeEphemeral bool              // include the ephemeral (wisps) tier
+	Sort             SortOrder         // SortCreatedAsc == bd "--sort oldest"
+	Limit            int
+}
+
+// ControlReadyQuerier is implemented only by stores that can answer a
+// ControlReadyFilter in-process. Callers MUST type-assert and fall back to the
+// shell query path when it is not implemented.
+type ControlReadyQuerier interface {
+	ControlReady(filter ControlReadyFilter) ([]Bead, error)
+}
+
 // HasFilter reports whether the query includes at least one indexed selector.
 func (q ListQuery) HasFilter() bool {
 	return q.Status != "" ||
