@@ -176,7 +176,7 @@
         },
         "min_active_sessions": {
           "type": "integer",
-          "description": "MinActiveSessions is the minimum number of sessions to keep alive.\nAgent-level only. Counts against rig/workspace caps. Replaces pool.min."
+          "description": "MinActiveSessions is the minimum number of sessions to keep alive.\nAgent-level only. Counts against rig/workspace caps. Replaces pool.min.\nThis controls pool sessions independently of [[named_session]]\nmode=\"always\"; both produce sessions, and gc doctor reports accidental\ncombinations."
         },
         "scale_check": {
           "type": "string",
@@ -1700,7 +1700,7 @@
             "on_demand",
             "always"
           ],
-          "description": "Mode controls controller behavior for this named session.\n\"on_demand\" (default): reserve identity and materialize when work or\nan explicit reference requires it.\n\"always\": keep the canonical session controller-managed."
+          "description": "Mode controls when the controller ensures this named session is live.\n\"on_demand\" (default): reserve identity and materialize when work or\nan explicit reference requires it.\n\"always\": keep the canonical session controller-managed.\nNote: mode=\"always\" is independent of min_active_sessions; both produce\nsessions, and gc doctor reports accidental duplicate-pool combinations."
         }
       },
       "additionalProperties": false,

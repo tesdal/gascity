@@ -378,10 +378,12 @@ type NamedSession struct {
 	// Dir is the identity prefix for rig-scoped named sessions after pack
 	// expansion. Empty means city-scoped.
 	Dir string `toml:"dir,omitempty"`
-	// Mode controls controller behavior for this named session.
+	// Mode controls when the controller ensures this named session is live.
 	// "on_demand" (default): reserve identity and materialize when work or
 	// an explicit reference requires it.
 	// "always": keep the canonical session controller-managed.
+	// Note: mode="always" is independent of min_active_sessions; both produce
+	// sessions, and gc doctor reports accidental duplicate-pool combinations.
 	Mode string `toml:"mode,omitempty" jsonschema:"enum=on_demand,enum=always"`
 	// SourceDir is the directory where this named session's config was
 	// defined. Set during pack/fragment loading; empty for inline config.
@@ -2429,6 +2431,9 @@ type Agent struct {
 	MaxActiveSessions *int `toml:"max_active_sessions,omitempty"`
 	// MinActiveSessions is the minimum number of sessions to keep alive.
 	// Agent-level only. Counts against rig/workspace caps. Replaces pool.min.
+	// This controls pool sessions independently of [[named_session]]
+	// mode="always"; both produce sessions, and gc doctor reports accidental
+	// combinations.
 	MinActiveSessions *int `toml:"min_active_sessions,omitempty"`
 	// ScaleCheck is a shell command template whose output reports new
 	// unassigned session demand. In bead-backed reconciliation this is
