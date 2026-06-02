@@ -730,6 +730,55 @@ func workflowServeControlReadyQuery(agentCfg config.Agent, controlSessionNames .
 	return query
 }
 
+// controlReadyIDEnvVars is the candidate-id resolution order, matching the shell
+// loop in workflowServeControlReadyQuery exactly.
+var controlReadyIDEnvVars = []string{
+	"GC_CONTROL_SESSION_NAME",
+	"GC_SESSION_NAME",
+	"GC_ALIAS",
+	"GC_CONTROL_TARGET",
+	"GC_SESSION_ID",
+}
+
+// deriveControlReadyTargets reproduces the shell query's candidate-id and route
+// derivation in-process. It returns candidates in loop order WITHOUT pre-dedup
+// (the shell merges then dedups first-occurrence-wins), each control-dispatcher
+// id followed by its legacy "workflow-control" variant; and routes as
+// [GC_CONTROL_TARGET, GC_CONTROL_LEGACY_TARGET] (empties skipped).
+func deriveControlReadyTargets(env map[string]string) (candidates, routes []string) {
+	for _, key := range controlReadyIDEnvVars {
+		id := strings.TrimSpace(env[key])
+		if id == "" {
+			continue
+		}
+		candidates = append(candidates, id)
+		if legacy := controlReadyLegacyCandidate(id); legacy != "" {
+			candidates = append(candidates, legacy)
+		}
+	}
+	if target := strings.TrimSpace(env["GC_CONTROL_TARGET"]); target != "" {
+		routes = append(routes, target)
+		legacy := strings.TrimSpace(env["GC_CONTROL_LEGACY_TARGET"])
+		if legacy == "" {
+			legacy = controlReadyLegacyCandidate(target)
+		}
+		if legacy != "" {
+			routes = append(routes, legacy)
+		}
+	}
+	return candidates, routes
+}
+
+// controlReadyLegacyCandidate mirrors the shell `case "$id" in *control-dispatcher)`
+// expansion: id ending in "control-dispatcher" → "<prefix>workflow-control".
+func controlReadyLegacyCandidate(id string) string {
+	const suffix = "control-dispatcher"
+	if strings.HasSuffix(id, suffix) {
+		return strings.TrimSuffix(id, suffix) + "workflow-control"
+	}
+	return ""
+}
+
 func workflowServeLegacyControlRoute(target string) string {
 	target = strings.TrimSpace(target)
 	if target == config.ControlDispatcherAgentName {
