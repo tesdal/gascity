@@ -743,8 +743,11 @@ var controlReadyIDEnvVars = []string{
 // deriveControlReadyTargets reproduces the shell query's candidate-id and route
 // derivation in-process. It returns candidates in loop order WITHOUT pre-dedup
 // (the shell merges then dedups first-occurrence-wins), each control-dispatcher
-// id followed by its legacy "workflow-control" variant; and routes as
-// [GC_CONTROL_TARGET, GC_CONTROL_LEGACY_TARGET] (empties skipped).
+// id followed by its candidate-loop legacy "workflow-control" variant; and routes
+// as [GC_CONTROL_TARGET, GC_CONTROL_LEGACY_TARGET] (empties skipped). The legacy
+// route is taken from env (as Task 5 bakes it, mirroring the shell prefix) and
+// falls back to workflowServeLegacyControlRoute(target) — the same slash-aware
+// helper the shell prefix uses — never the candidate-loop rule.
 func deriveControlReadyTargets(env map[string]string) (candidates, routes []string) {
 	for _, key := range controlReadyIDEnvVars {
 		id := strings.TrimSpace(env[key])
@@ -758,9 +761,15 @@ func deriveControlReadyTargets(env map[string]string) (candidates, routes []stri
 	}
 	if target := strings.TrimSpace(env["GC_CONTROL_TARGET"]); target != "" {
 		routes = append(routes, target)
+		// Route-legacy parity: the shell bakes GC_CONTROL_LEGACY_TARGET via
+		// workflowServeLegacyControlRoute (slash-aware), which differs from the
+		// candidate-loop rule (controlReadyLegacyCandidate) for non-"/"-delimited
+		// ids. Prefer the env value Task 5 sets to match the shell prefix exactly;
+		// derive with the SAME route helper only as a fallback so the in-process
+		// path never diverges from the shell's routed_ready legacy route.
 		legacy := strings.TrimSpace(env["GC_CONTROL_LEGACY_TARGET"])
 		if legacy == "" {
-			legacy = controlReadyLegacyCandidate(target)
+			legacy = workflowServeLegacyControlRoute(target)
 		}
 		if legacy != "" {
 			routes = append(routes, legacy)
