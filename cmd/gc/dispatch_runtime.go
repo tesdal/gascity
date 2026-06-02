@@ -326,7 +326,7 @@ func runWorkflowServe(agentName string, follow bool, _ io.Writer, stderr io.Writ
 	// rig-scoped command instead of passing the literal template to the shell
 	// on every iteration. #793.
 	workQuery := expandAgentCommandTemplate(cityPath, cityName, &agentCfg, cfg.Rigs, "work_query", agentCfg.EffectiveWorkQuery(), stderr)
-	if agentCfg.WorkQuery == "" && isWorkflowServeControlDispatcherAgent(agentCfg) {
+	if isWorkflowServeControlReadyAgent(agentCfg) {
 		workQuery = workflowServeControlReadyQuery(agentCfg, config.NamedSessionRuntimeName(cityName, cfg.Workspace, agentCfg.QualifiedName()))
 	}
 	workflowTracef("serve start agent=%s city=%s dir=%s", agentCfg.QualifiedName(), cityPath, workDir)
@@ -438,7 +438,8 @@ func drainWorkflowServeWork(agentCfg config.Agent, cityPath, storePath, workQuer
 	idlePolls := 0
 	for {
 		serveQuery := workflowServeWorkQuery(agentCfg, workQuery)
-		queue, err := workflowServeList(serveQuery, storePath, workEnv)
+		res := serveControlReadyOrShell(agentCfg, cityPath, storePath, serveQuery, workEnv, stderr)
+		queue, err := res.queue, res.err
 		if err != nil {
 			workflowTracef("serve query-error agent=%s err=%v", agentCfg.QualifiedName(), err)
 			// Surface a killed/timed-out control work query on the event
@@ -678,7 +679,7 @@ func workflowServeWorkQuery(agentCfg config.Agent, expandedWorkQuery ...string) 
 	if len(expandedWorkQuery) > 0 {
 		return workflowServeQuery(expandedWorkQuery[0])
 	}
-	if agentCfg.WorkQuery == "" && isWorkflowServeControlDispatcherAgent(agentCfg) {
+	if isWorkflowServeControlReadyAgent(agentCfg) {
 		return workflowServeControlReadyQuery(agentCfg)
 	}
 	workQuery := agentCfg.EffectiveWorkQuery()
@@ -842,6 +843,112 @@ func controlDispatcherReadyBeads(q beads.ControlReadyQuerier, candidates, routes
 	// shell on a transient native hiccup (that would reintroduce execs). The
 	// error return remains in the signature for forward-compat but is never set.
 	return merged, nil
+}
+
+// controlReadyStoreOpener opens a store for the given paths and reports whether
+// it can answer control-ready queries in-process. Swappable for tests. The
+// production implementation reuses the same path gc status uses to select the
+// store, so eligibility exactly matches reported beads_store.
+//
+// MAJOR review fix (store churn): the serve loop calls this on EVERY drain
+// iteration (drainWorkflowServeWork inner loop). Opening a fresh native store
+// each poll re-introduces per-cycle churn — the exact thing we are eliminating.
+// The production opener therefore MEMOIZES by (storePath, cityPath): it opens
+// once and reuses the handle for the lifetime of the serve process (which is
+// bound to a single fixed scope). Tests swap the var with their own func, so
+// memoization is invisible to them.
+var controlReadyStoreOpener = newCachingControlReadyOpener()
+
+func newCachingControlReadyOpener() func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+	var (
+		mu        sync.Mutex
+		cachedKey string
+		cachedQ   beads.ControlReadyQuerier
+		cachedOK  bool
+		done      bool
+	)
+	return func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		key := storePath + "\x00" + cityPath
+		if done && key == cachedKey {
+			return cachedQ, cachedOK
+		}
+		store, err := openStoreAtForCity(storePath, cityPath)
+		if err != nil {
+			cachedKey, cachedQ, cachedOK, done = key, nil, false, true
+			return nil, false
+		}
+		q, ok := store.(beads.ControlReadyQuerier)
+		cachedKey, cachedQ, cachedOK, done = key, q, ok, true
+		return q, ok
+	}
+}
+
+// serveControlReadyResult carries the queue plus whether the in-process path ran
+// (for tracing/metrics).
+type serveControlReadyResult struct {
+	queue     []hookBead
+	inProcess bool
+	err       error
+}
+
+// isWorkflowServeControlReadyAgent reports whether the serve loop substitutes the
+// control-ready query for this agent. It mirrors the upstream gate in
+// runWorkflowServe (dispatch_runtime.go:326): a control-dispatcher agent with NO
+// custom WorkQuery. A control-dispatcher WITH a WorkQuery uses its expanded work
+// query, so the in-process path must NOT hijack it. Both the upstream query
+// builder and the serve seam reference this helper so the two stay in lockstep.
+func isWorkflowServeControlReadyAgent(agentCfg config.Agent) bool {
+	return agentCfg.WorkQuery == "" && isWorkflowServeControlDispatcherAgent(agentCfg)
+}
+
+// serveControlReadyOrShell returns the control-dispatcher ready queue, preferring
+// the in-process capability and falling back to the shell query var otherwise.
+func serveControlReadyOrShell(agentCfg config.Agent, cityPath, storePath, serveQuery string, workEnv map[string]string, stderr io.Writer) serveControlReadyResult {
+	if isWorkflowServeControlReadyAgent(agentCfg) {
+		if q, ok := controlReadyStoreOpener(storePath, cityPath); ok {
+			candidates, routes := deriveControlReadyTargets(controlReadyResolvedEnv(agentCfg, workEnv))
+			queue, err := controlDispatcherReadyBeads(q, candidates, routes, workflowServeScanLimit)
+			if err == nil {
+				return serveControlReadyResult{queue: queue, inProcess: true}
+			}
+			// On in-process error, fall through to the shell path (safety).
+			fmt.Fprintf(stderr, "control-ready in-process path failed, falling back to shell: %v\n", err)
+		}
+	}
+	queue, err := workflowServeList(serveQuery, storePath, workEnv)
+	return serveControlReadyResult{queue: queue, err: err}
+}
+
+// controlReadyResolvedEnv reproduces the EXACT env the shell query sees. CRITICAL
+// review fix (C1): GC_CONTROL_TARGET / GC_CONTROL_SESSION_NAME /
+// GC_CONTROL_LEGACY_TARGET are NOT present in workEnv or os.Environ — the shell
+// path bakes them into its command prefix (workflowServeControlReadyQuery,
+// dispatch_runtime.go:697-708). We must inject the same values here, mirroring
+// that prefix construction exactly, or deriveControlReadyTargets returns a strict
+// subset of candidates/routes and the in-process path silently diverges.
+//
+// GC_CONTROL_SESSION_NAME: the shell builder sets this from runWorkflowServe's
+// config.NamedSessionRuntimeName(...) value (dispatch_runtime.go:327), which —
+// for a managed control-dispatcher serve session — is identical to GC_SESSION_NAME
+// already present in os.Environ (both are agent.SessionNameFor(cityName, identity,
+// template)). The candidate loop therefore picks up the same id via GC_SESSION_NAME
+// even when GC_CONTROL_SESSION_NAME is absent, so we deliberately do NOT invent a
+// value here. The Task 6 golden parity test is the hard backstop on this equivalence.
+func controlReadyResolvedEnv(agentCfg config.Agent, workEnv map[string]string) map[string]string {
+	env := envSliceToMap(mergeRuntimeEnv(os.Environ(), workEnv))
+
+	target := strings.TrimSpace(agentCfg.QualifiedName())
+	if target == "" {
+		target = config.ControlDispatcherAgentName
+	}
+	env["GC_CONTROL_TARGET"] = target
+
+	if legacy := workflowServeLegacyControlRoute(target); legacy != "" {
+		env["GC_CONTROL_LEGACY_TARGET"] = legacy
+	}
+	return env
 }
 
 func workflowServeLegacyControlRoute(target string) string {

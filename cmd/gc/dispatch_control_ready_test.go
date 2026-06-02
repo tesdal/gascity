@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 )
 
 func TestDeriveControlReadyTargets_OrderAndLegacyExpansion(t *testing.T) {
@@ -134,6 +136,116 @@ func TestControlDispatcherReadyBeads_EmptyInputsReturnNilNil(t *testing.T) {
 	got, err := controlDispatcherReadyBeads(f, nil, nil, 50)
 	if err != nil || got != nil {
 		t.Fatalf("empty inputs: got (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// controlDispatcherAgentCfgForTest returns a control-dispatcher config.Agent
+// whose QualifiedName() ("rig/control-dispatcher") satisfies
+// isWorkflowServeControlDispatcherAgent and whose empty WorkQuery satisfies the
+// shell's control-ready gate (dispatch_runtime.go:326).
+func controlDispatcherAgentCfgForTest(t *testing.T) config.Agent {
+	t.Helper()
+	return config.Agent{Name: config.ControlDispatcherAgentName, Dir: "rig"}
+}
+
+func TestControlReadyServeSelection_UsesInProcessWhenCapable(t *testing.T) {
+	// Inject a store opener returning a capable fake; assert the shell path
+	// (workflowServeList) is NOT called for the control-dispatcher agent.
+	prevOpener := controlReadyStoreOpener
+	prevList := workflowServeList
+	t.Cleanup(func() { controlReadyStoreOpener = prevOpener; workflowServeList = prevList })
+
+	fake := &fakeControlReadyQuerier{results: map[string][]beads.Bead{
+		"assignee=rig/control-dispatcher": {{ID: "in-proc-1"}},
+	}}
+	controlReadyStoreOpener = func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+		return fake, true
+	}
+	shellCalled := false
+	workflowServeList = func(workQuery, dir string, env map[string]string) ([]hookBead, error) {
+		shellCalled = true
+		return nil, nil
+	}
+
+	got := serveControlReadyOrShell(
+		controlDispatcherAgentCfgForTest(t),
+		"city", "store", "serveQuery",
+		map[string]string{"GC_CONTROL_TARGET": "rig/control-dispatcher"},
+		io.Discard,
+	)
+	if shellCalled {
+		t.Fatalf("shell path must not run when in-process capability is present")
+	}
+	if ids := hookIDs(got.queue); !equalStrs(ids, []string{"in-proc-1"}) {
+		t.Fatalf("in-process selection: got %v, want [in-proc-1]", ids)
+	}
+}
+
+func TestControlReadyServeSelection_FallsBackToShellWhenIncapable(t *testing.T) {
+	prevOpener := controlReadyStoreOpener
+	prevList := workflowServeList
+	t.Cleanup(func() { controlReadyStoreOpener = prevOpener; workflowServeList = prevList })
+
+	controlReadyStoreOpener = func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+		return nil, false // not capable (e.g. BdStore)
+	}
+	shellCalled := false
+	workflowServeList = func(workQuery, dir string, env map[string]string) ([]hookBead, error) {
+		shellCalled = true
+		return []hookBead{{ID: "shell-1"}}, nil
+	}
+
+	got := serveControlReadyOrShell(
+		controlDispatcherAgentCfgForTest(t),
+		"city", "store", "serveQuery",
+		map[string]string{"GC_CONTROL_TARGET": "rig/control-dispatcher"},
+		io.Discard,
+	)
+	if !shellCalled {
+		t.Fatalf("shell path must run when capability is absent")
+	}
+	if ids := hookIDs(got.queue); !equalStrs(ids, []string{"shell-1"}) {
+		t.Fatalf("fallback: got %v, want [shell-1]", ids)
+	}
+}
+
+// TestControlReadyServeSelection_FallsBackToShellWhenAgentHasCustomWorkQuery
+// guards the parity gate (dispatch_runtime.go:326): the shell only substitutes
+// the control-ready query when the control-dispatcher agent has NO custom
+// WorkQuery. A control-dispatcher WITH a WorkQuery uses its expanded work query,
+// so the in-process path MUST NOT hijack it — even though the store is capable.
+func TestControlReadyServeSelection_FallsBackToShellWhenAgentHasCustomWorkQuery(t *testing.T) {
+	prevOpener := controlReadyStoreOpener
+	prevList := workflowServeList
+	t.Cleanup(func() { controlReadyStoreOpener = prevOpener; workflowServeList = prevList })
+
+	openerCalled := false
+	controlReadyStoreOpener = func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+		openerCalled = true
+		return &fakeControlReadyQuerier{}, true // capable, but must not be used
+	}
+	shellCalled := false
+	workflowServeList = func(workQuery, dir string, env map[string]string) ([]hookBead, error) {
+		shellCalled = true
+		return []hookBead{{ID: "shell-custom-1"}}, nil
+	}
+
+	agentCfg := controlDispatcherAgentCfgForTest(t)
+	agentCfg.WorkQuery = "bd ready --assignee=rig/control-dispatcher --json --limit=1"
+
+	got := serveControlReadyOrShell(
+		agentCfg, "city", "store", "serveQuery",
+		map[string]string{"GC_CONTROL_TARGET": "rig/control-dispatcher"},
+		io.Discard,
+	)
+	if openerCalled {
+		t.Fatalf("store opener must not run when the control-dispatcher has a custom WorkQuery")
+	}
+	if !shellCalled {
+		t.Fatalf("shell path must run when the control-dispatcher has a custom WorkQuery")
+	}
+	if ids := hookIDs(got.queue); !equalStrs(ids, []string{"shell-custom-1"}) {
+		t.Fatalf("custom-workquery fallback: got %v, want [shell-custom-1]", ids)
 	}
 }
 

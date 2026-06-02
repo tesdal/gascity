@@ -1419,6 +1419,20 @@ func mergeRuntimeEnv(environ []string, overrides map[string]string) []string {
 	return out
 }
 
+// envSliceToMap converts a "K=V" environ slice into a map (last-wins for
+// duplicate keys, mirroring how the OS resolves a process environment). Entries
+// without an "=" are ignored. The value may itself contain "=" (only the first
+// is the separator).
+func envSliceToMap(environ []string) map[string]string {
+	out := make(map[string]string, len(environ))
+	for _, entry := range environ {
+		if i := strings.IndexByte(entry, '='); i >= 0 {
+			out[entry[:i]] = entry[i+1:]
+		}
+	}
+	return out
+}
+
 func removeEnvKey(environ []string, key string) []string {
 	prefix := key + "="
 	out := make([]string, 0, len(environ))
