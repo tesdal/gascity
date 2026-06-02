@@ -139,6 +139,66 @@ func TestControlDispatcherReadyBeads_EmptyInputsReturnNilNil(t *testing.T) {
 	}
 }
 
+// TestControlReady_GoldenPipeline_DeriveThenFanOut is the anti-drift golden for
+// the cmd/gc-owned orchestration: it ties deriveControlReadyTargets (Task 3) to
+// controlDispatcherReadyBeads (Task 4) as a single pipeline over a realistic
+// control-dispatcher env, and pins the exact ordered, deduped id list.
+//
+// Parity layering (why this needs no shell bd / real dolt): the store-side filter
+// semantics (ControlReady == bd ready for assignee / unassigned+metadata /
+// exclude-epic / include-ephemeral / exclude-in-progress / sort+limit) are guarded
+// in internal/beads (TestControlReady_* mirror the proven Ready path, plus the
+// //go:build integration real-backend round-trip). What lives ONLY in cmd/gc — and
+// is therefore what THIS test must lock — is candidate/route derivation order,
+// legacy expansion, the run_target/routed_to route fan-out, and first-occurrence
+// cross-query dedup. The fakeControlReadyQuerier models "what the store returns per
+// sub-query" so the assertion isolates exactly that orchestration.
+func TestControlReady_GoldenPipeline_DeriveThenFanOut(t *testing.T) {
+	env := map[string]string{
+		"GC_CONTROL_SESSION_NAME":  "rig/control-dispatcher",
+		"GC_SESSION_NAME":          "rig/control-dispatcher", // dup of session-name candidate
+		"GC_ALIAS":                 "rig-ctrl",               // no legacy expansion
+		"GC_CONTROL_TARGET":        "rig/control-dispatcher",
+		"GC_SESSION_ID":            "sess-xyz", // no legacy expansion
+		"GC_CONTROL_LEGACY_TARGET": "rig/workflow-control",
+	}
+	candidates, routes := deriveControlReadyTargets(env)
+
+	f := &fakeControlReadyQuerier{results: map[string][]beads.Bead{
+		// Assignee sub-queries (one per distinct candidate; dup candidates re-run
+		// the same query and must contribute nothing new).
+		"assignee=rig/control-dispatcher": {{ID: "cd-1"}, {ID: "shared-cd-route"}},
+		"assignee=rig/workflow-control":   {{ID: "wc-1"}},
+		"assignee=rig-ctrl":               {{ID: "alias-1"}},
+		"assignee=sess-xyz":               {{ID: "sess-1"}},
+		// Route sub-queries: run_target + routed_to per route. shared-cd-route also
+		// surfaces here and must dedup to its first (assignee) occurrence.
+		"unassigned;gc.run_target=rig/control-dispatcher": {{ID: "shared-cd-route"}, {ID: "rt-1"}},
+		"unassigned;gc.routed_to=rig/control-dispatcher":  {{ID: "rtd-1"}},
+		"unassigned;gc.run_target=rig/workflow-control":   {{ID: "wc-rt-1"}},
+		"unassigned;gc.routed_to=rig/workflow-control":    {{ID: "wc-rtd-1"}},
+	}}
+
+	got, err := controlDispatcherReadyBeads(f, candidates, routes, workflowServeScanLimit)
+	if err != nil {
+		t.Fatalf("controlDispatcherReadyBeads: %v", err)
+	}
+
+	want := []string{
+		"cd-1", "shared-cd-route", // assignee=rig/control-dispatcher
+		"wc-1",     // assignee=rig/workflow-control
+		"alias-1",  // assignee=rig-ctrl
+		"sess-1",   // assignee=sess-xyz
+		"rt-1",     // route run_target=rig/control-dispatcher (shared-cd-route deduped)
+		"rtd-1",    // route routed_to=rig/control-dispatcher
+		"wc-rt-1",  // route run_target=rig/workflow-control
+		"wc-rtd-1", // route routed_to=rig/workflow-control
+	}
+	if ids := hookIDs(got); !equalStrs(ids, want) {
+		t.Fatalf("golden pipeline drift:\n got  %v\n want %v", ids, want)
+	}
+}
+
 // controlDispatcherAgentCfgForTest returns a control-dispatcher config.Agent
 // whose QualifiedName() ("rig/control-dispatcher") satisfies
 // isWorkflowServeControlDispatcherAgent and whose empty WorkQuery satisfies the
