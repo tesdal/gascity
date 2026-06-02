@@ -235,6 +235,26 @@ func TestControlReady_ExcludesInProgressAndBlocked(t *testing.T) {
 	}
 }
 
+// TestIsControlReadyCandidate_ExcludesInfraLabels locks the rebase-conflict
+// resolution (codex review #3): isControlReadyCandidate uses the label-aware
+// IsReadyExcludedBead, so control-ready drops infrastructure beads (gc:session /
+// gc:order-tracking / order-tracking) exactly as `bd ready` does. Locking this
+// prevents a future rebase from silently reverting to type-only exclusion and
+// diverging from shell-path parity.
+func TestIsControlReadyCandidate_ExcludesInfraLabels(t *testing.T) {
+	now := time.Now().UTC()
+	for _, label := range []string{"gc:session", "gc:order-tracking", "order-tracking"} {
+		b := Bead{ID: "x", Status: "open", Type: "task", Labels: []string{label}}
+		if isControlReadyCandidate(b, now, true) {
+			t.Errorf("bead with infra label %q must be excluded from control-ready (bd ready parity)", label)
+		}
+	}
+	// Sanity: a plain open task with no infra label/type IS a candidate.
+	if !isControlReadyCandidate(Bead{ID: "ok", Status: "open", Type: "task"}, now, true) {
+		t.Fatal("plain open task should be a control-ready candidate")
+	}
+}
+
 func idsOf(bs []Bead) []string {
 	ids := make([]string, 0, len(bs))
 	for _, b := range bs {

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -306,6 +307,107 @@ func TestControlReadyServeSelection_FallsBackToShellWhenAgentHasCustomWorkQuery(
 	}
 	if ids := hookIDs(got.queue); !equalStrs(ids, []string{"shell-custom-1"}) {
 		t.Fatalf("custom-workquery fallback: got %v, want [shell-custom-1]", ids)
+	}
+}
+
+// TestApplyControlReadyServeSetup_BakesControlSessionNameIntoEnv locks the
+// parity fix (codex review #1): the gate must inject GC_CONTROL_SESSION_NAME into
+// workEnv from the SAME NamedSessionRuntimeName value the shell prefix bakes, so
+// the in-process path never relies on GC_SESSION_NAME being present/equal.
+func TestApplyControlReadyServeSetup_BakesControlSessionNameIntoEnv(t *testing.T) {
+	agentCfg := controlDispatcherAgentCfgForTest(t)
+	workEnv := map[string]string{} // deliberately no GC_SESSION_NAME
+	const sessionName = "rig--control-dispatcher"
+
+	query := applyControlReadyServeSetup(agentCfg, sessionName, workEnv)
+
+	if got := workEnv["GC_CONTROL_SESSION_NAME"]; got != sessionName {
+		t.Fatalf("workEnv[GC_CONTROL_SESSION_NAME] = %q, want %q", got, sessionName)
+	}
+	if !strings.Contains(query, "GC_CONTROL_SESSION_NAME=") || !strings.Contains(query, sessionName) {
+		t.Fatalf("control-ready query missing baked session name %q: %s", sessionName, query)
+	}
+}
+
+// TestControlReadySetup_InProcessSeesControlSessionNameWithoutGcSessionName is the
+// behavioral parity backstop: with GC_SESSION_NAME absent, the in-process
+// candidate derivation must STILL include the control session name (because the
+// gate baked GC_CONTROL_SESSION_NAME), matching the shell prefix candidate set.
+func TestControlReadySetup_InProcessSeesControlSessionNameWithoutGcSessionName(t *testing.T) {
+	agentCfg := controlDispatcherAgentCfgForTest(t)
+	workEnv := map[string]string{} // no GC_SESSION_NAME
+	const sessionName = "rig--control-dispatcher"
+
+	applyControlReadyServeSetup(agentCfg, sessionName, workEnv)
+
+	candidates, _ := deriveControlReadyTargets(controlReadyResolvedEnv(agentCfg, workEnv))
+	found := false
+	for _, c := range candidates {
+		if c == sessionName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("in-process candidates %v missing control session name %q (parity gap)", candidates, sessionName)
+	}
+}
+
+// TestApplyControlReadyServeSetup_BlankSessionNameLeavesEnvUntouched guards
+// against baking an empty GC_CONTROL_SESSION_NAME (which would add a spurious
+// empty candidate / diverge from the shell prefix that skips empty names).
+func TestApplyControlReadyServeSetup_BlankSessionNameLeavesEnvUntouched(t *testing.T) {
+	agentCfg := controlDispatcherAgentCfgForTest(t)
+	workEnv := map[string]string{}
+
+	applyControlReadyServeSetup(agentCfg, "   ", workEnv)
+
+	if _, ok := workEnv["GC_CONTROL_SESSION_NAME"]; ok {
+		t.Fatalf("blank session name must not be baked into workEnv: %v", workEnv)
+	}
+}
+
+// TestCachingControlReadyOpener_RetriesAfterTransientFailure locks codex review
+// #4: a transient open failure must NOT be cached (which would permanently
+// disable the native path for the process lifetime); the next poll retries.
+func TestCachingControlReadyOpener_RetriesAfterTransientFailure(t *testing.T) {
+	calls := 0
+	fake := &fakeControlReadyQuerier{}
+	open := func(storePath, cityPath string) (beads.ControlReadyQuerier, bool, error) {
+		calls++
+		if calls == 1 {
+			return nil, false, fmt.Errorf("transient open failure")
+		}
+		return fake, true, nil
+	}
+	opener := newCachingControlReadyOpener(open)
+
+	if q, ok := opener("s", "c"); ok || q != nil {
+		t.Fatalf("first call should report not-capable on open failure, got ok=%v q=%v", ok, q)
+	}
+	if q, ok := opener("s", "c"); !ok || q != beads.ControlReadyQuerier(fake) {
+		t.Fatalf("second call should retry and succeed, got ok=%v q=%v", ok, q)
+	}
+	if calls != 2 {
+		t.Fatalf("expected open retried (2 calls), got %d", calls)
+	}
+}
+
+// TestCachingControlReadyOpener_CachesSuccess confirms the memoization still
+// holds for successful opens (no per-poll churn — the original optimization).
+func TestCachingControlReadyOpener_CachesSuccess(t *testing.T) {
+	calls := 0
+	fake := &fakeControlReadyQuerier{}
+	open := func(storePath, cityPath string) (beads.ControlReadyQuerier, bool, error) {
+		calls++
+		return fake, true, nil
+	}
+	opener := newCachingControlReadyOpener(open)
+
+	opener("s", "c")
+	opener("s", "c")
+	if calls != 1 {
+		t.Fatalf("successful open must be cached (1 call), got %d", calls)
 	}
 }
 

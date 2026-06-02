@@ -327,7 +327,7 @@ func runWorkflowServe(agentName string, follow bool, _ io.Writer, stderr io.Writ
 	// on every iteration. #793.
 	workQuery := expandAgentCommandTemplate(cityPath, cityName, &agentCfg, cfg.Rigs, "work_query", agentCfg.EffectiveWorkQuery(), stderr)
 	if isWorkflowServeControlReadyAgent(agentCfg) {
-		workQuery = workflowServeControlReadyQuery(agentCfg, config.NamedSessionRuntimeName(cityName, cfg.Workspace, agentCfg.QualifiedName()))
+		workQuery = applyControlReadyServeSetup(agentCfg, config.NamedSessionRuntimeName(cityName, cfg.Workspace, agentCfg.QualifiedName()), workEnv)
 	}
 	workflowTracef("serve start agent=%s city=%s dir=%s", agentCfg.QualifiedName(), cityPath, workDir)
 	if !follow {
@@ -692,6 +692,27 @@ func isWorkflowServeControlDispatcherAgent(agentCfg config.Agent) bool {
 		strings.HasSuffix(qualified, "/"+config.ControlDispatcherAgentName)
 }
 
+// applyControlReadyServeSetup configures the serve loop for a control-ready
+// (control-dispatcher, no custom WorkQuery) agent. It returns the baked shell
+// control-ready work query AND injects GC_CONTROL_SESSION_NAME into workEnv so the
+// in-process path (controlReadyResolvedEnv -> deriveControlReadyTargets) derives
+// the IDENTICAL candidate set the shell prefix bakes.
+//
+// Parity fix (codex review #1): the shell prefix ALWAYS sets GC_CONTROL_SESSION_NAME
+// from config.NamedSessionRuntimeName(...). Previously the in-process path relied
+// on GC_SESSION_NAME being present and equal to that value, which holds for managed
+// --follow sessions but is not guaranteed in manual/non-follow contexts. Baking the
+// exact same value into workEnv removes that implicit assumption so both paths see
+// the same candidate ids. An empty session name is skipped (matching the shell
+// prefix loop, which `continue`s on blank names).
+func applyControlReadyServeSetup(agentCfg config.Agent, controlSessionName string, workEnv map[string]string) string {
+	controlSessionName = strings.TrimSpace(controlSessionName)
+	if controlSessionName != "" && workEnv != nil {
+		workEnv["GC_CONTROL_SESSION_NAME"] = controlSessionName
+	}
+	return workflowServeControlReadyQuery(agentCfg, controlSessionName)
+}
+
 func workflowServeControlReadyQuery(agentCfg config.Agent, controlSessionNames ...string) string {
 	target := strings.TrimSpace(agentCfg.QualifiedName())
 	if target == "" {
@@ -857,30 +878,45 @@ func controlDispatcherReadyBeads(q beads.ControlReadyQuerier, candidates, routes
 // once and reuses the handle for the lifetime of the serve process (which is
 // bound to a single fixed scope). Tests swap the var with their own func, so
 // memoization is invisible to them.
-var controlReadyStoreOpener = newCachingControlReadyOpener()
+var controlReadyStoreOpener = newCachingControlReadyOpener(openControlReadyStore)
 
-func newCachingControlReadyOpener() func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
+// openControlReadyStore is the production open func: it opens the store gc status
+// would select and reports whether it can answer control-ready queries in-process.
+func openControlReadyStore(storePath, cityPath string) (beads.ControlReadyQuerier, bool, error) {
+	store, err := openStoreAtForCity(storePath, cityPath)
+	if err != nil {
+		return nil, false, err
+	}
+	q, ok := store.(beads.ControlReadyQuerier)
+	return q, ok, nil
+}
+
+func newCachingControlReadyOpener(open func(storePath, cityPath string) (beads.ControlReadyQuerier, bool, error)) func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
 	var (
 		mu        sync.Mutex
 		cachedKey string
 		cachedQ   beads.ControlReadyQuerier
 		cachedOK  bool
-		done      bool
+		cached    bool
 	)
 	return func(storePath, cityPath string) (beads.ControlReadyQuerier, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		key := storePath + "\x00" + cityPath
-		if done && key == cachedKey {
+		if cached && key == cachedKey {
 			return cachedQ, cachedOK
 		}
-		store, err := openStoreAtForCity(storePath, cityPath)
+		q, ok, err := open(storePath, cityPath)
 		if err != nil {
-			cachedKey, cachedQ, cachedOK, done = key, nil, false, true
+			// Do NOT cache a transient open failure (codex review #4): caching
+			// (nil,false) would permanently disable the native path for the
+			// process lifetime on a one-time store hiccup. Falling back to the
+			// shell this cycle is safe; the next poll retries the open. The
+			// store-not-capable result (ok==false, err==nil) IS cached below
+			// since that is a stable type fact, not a transient condition.
 			return nil, false
 		}
-		q, ok := store.(beads.ControlReadyQuerier)
-		cachedKey, cachedQ, cachedOK, done = key, q, ok, true
+		cachedKey, cachedQ, cachedOK, cached = key, q, ok, true
 		return q, ok
 	}
 }
@@ -930,12 +966,10 @@ func serveControlReadyOrShell(agentCfg config.Agent, cityPath, storePath, serveQ
 // subset of candidates/routes and the in-process path silently diverges.
 //
 // GC_CONTROL_SESSION_NAME: the shell builder sets this from runWorkflowServe's
-// config.NamedSessionRuntimeName(...) value (dispatch_runtime.go:327), which —
-// for a managed control-dispatcher serve session — is identical to GC_SESSION_NAME
-// already present in os.Environ (both are agent.SessionNameFor(cityName, identity,
-// template)). The candidate loop therefore picks up the same id via GC_SESSION_NAME
-// even when GC_CONTROL_SESSION_NAME is absent, so we deliberately do NOT invent a
-// value here. The Task 6 golden parity test is the hard backstop on this equivalence.
+// config.NamedSessionRuntimeName(...) value. applyControlReadyServeSetup bakes the
+// SAME value into workEnv at the gate, so it flows in here via mergeRuntimeEnv and
+// deriveControlReadyTargets picks it up as the first candidate — matching the shell
+// prefix exactly even when GC_SESSION_NAME is absent or differs (codex review #1).
 func controlReadyResolvedEnv(agentCfg config.Agent, workEnv map[string]string) map[string]string {
 	env := envSliceToMap(mergeRuntimeEnv(os.Environ(), workEnv))
 
