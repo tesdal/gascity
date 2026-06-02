@@ -788,6 +788,62 @@ func controlReadyLegacyCandidate(id string) string {
 	return ""
 }
 
+// controlDispatcherReadyBeads runs the control-dispatcher ready fan-out in-process,
+// mirroring workflowServeControlReadyQuery's shell semantics exactly:
+//   - per candidate (in order, no pre-dedup): assignee ready, include-ephemeral,
+//     exclude-type=epic, limit=limit;
+//   - per route: two unassigned metadata queries (gc.run_target / gc.routed_to),
+//     include-ephemeral, exclude-type=epic, sort oldest, limit=limit;
+//   - per-subquery soft-fail (matches shell `|| true` and the final `|| printf "[]"`):
+//     log+skip a failing sub-query AND never surface an error to the caller — the
+//     shell script ALWAYS exits 0 with valid JSON (`[]` on total failure). True
+//     parity therefore means controlDispatcherReadyBeads never returns a non-nil
+//     error; sub-query failures only reduce results;
+//   - concatenate in order, dedup by id keeping first occurrence.
+//
+// Returns (nil, nil) when there is no work (matches shell `[]`).
+func controlDispatcherReadyBeads(q beads.ControlReadyQuerier, candidates, routes []string, limit int) ([]hookBead, error) {
+	var merged []hookBead
+	seen := make(map[string]bool)
+
+	emit := func(filter beads.ControlReadyFilter) {
+		got, err := q.ControlReady(filter)
+		if err != nil {
+			// soft-fail: skip this sub-query, mirroring shell `2>/dev/null || true`.
+			return
+		}
+		for _, b := range got {
+			if seen[b.ID] {
+				continue
+			}
+			seen[b.ID] = true
+			merged = append(merged, hookBead{ID: b.ID, Metadata: hookBeadMetadata(b.Metadata)})
+		}
+	}
+
+	for _, cand := range candidates {
+		emit(beads.ControlReadyFilter{
+			Assignee: cand, IncludeEphemeral: true,
+			ExcludeTypes: []string{"epic"}, Limit: limit,
+		})
+	}
+	for _, route := range routes {
+		for _, key := range []string{"gc.run_target", "gc.routed_to"} {
+			emit(beads.ControlReadyFilter{
+				Unassigned: true, Metadata: map[string]string{key: route},
+				IncludeEphemeral: true, ExcludeTypes: []string{"epic"},
+				Sort: beads.SortCreatedAsc, Limit: limit,
+			})
+		}
+	}
+
+	// Always (nil, nil) on no results — the shell path returns `[]` and exits 0
+	// even when every `bd` call failed, so the serve loop must NOT fall back to
+	// shell on a transient native hiccup (that would reintroduce execs). The
+	// error return remains in the signature for forward-compat but is never set.
+	return merged, nil
+}
+
 func workflowServeLegacyControlRoute(target string) string {
 	target = strings.TrimSpace(target)
 	if target == config.ControlDispatcherAgentName {
