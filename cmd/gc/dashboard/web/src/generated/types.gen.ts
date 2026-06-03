@@ -387,6 +387,20 @@ export type BeadUpdateBody = {
     type?: string;
 };
 
+export type BeadWorktreeReapSkippedPayload = {
+    bead_id: string;
+    path: string;
+    reason: string;
+    rig: string;
+};
+
+export type BeadWorktreeReapedPayload = {
+    bead_id: string;
+    branch: string;
+    path: string;
+    rig: string;
+};
+
 export type BeadsDiagnostic = {
     beads_store: string;
     native_store_eligible: boolean;
@@ -784,7 +798,7 @@ export type EventEmitRequest = {
     type: string;
 };
 
-export type EventPayload = AdapterEventPayload | BeadEventPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
+export type EventPayload = AdapterEventPayload | BeadEventPayload | BeadWorktreeReapSkippedPayload | BeadWorktreeReapedPayload | BoundEventPayload | CityCreateSucceededPayload | CityLifecyclePayload | CityUnregisterSucceededPayload | GroupCreatedEventPayload | InboundEventPayload | MailEventPayload | NoPayload | OutboundEventPayload | PostgresCredentialResolvedPayload | ProjectIdentityStampedPayload | RequestFailedPayload | RotatedPayload | SessionCreateSucceededPayload | SessionDrainAckedWithAssignedWorkPayload | SessionLifecyclePayload | SessionMessageSucceededPayload | SessionResetStalledPayload | SessionSubmitSucceededPayload | StoreMaintenanceDonePayload | StoreMaintenanceFailedPayload | SupervisorFsPressureSkippedTickPayload | SupervisorShutdownPayload | UnboundEventPayload | WorkerOperationEventPayload;
 
 export type EventRotateAnchor = {
     /**
@@ -3337,6 +3351,10 @@ export type TypedEventStreamEnvelope = ({
 } & TypedEventStreamEnvelopeBeadDeleted) | ({
     type: 'bead.updated';
 } & TypedEventStreamEnvelopeBeadUpdated) | ({
+    type: 'bead.worktree.reap_skipped';
+} & TypedEventStreamEnvelopeBeadWorktreeReapSkipped) | ({
+    type: 'bead.worktree.reaped';
+} & TypedEventStreamEnvelopeBeadWorktreeReaped) | ({
     type: 'city.created';
 } & TypedEventStreamEnvelopeCityCreated) | ({
     type: 'city.resumed';
@@ -3503,6 +3521,34 @@ export type TypedEventStreamEnvelopeBeadUpdated = {
     subject?: string;
     ts: string;
     type: 'bead.updated';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope bead.worktree.reap_skipped
+ */
+export type TypedEventStreamEnvelopeBeadWorktreeReapSkipped = {
+    actor: string;
+    message?: string;
+    payload: BeadWorktreeReapSkippedPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'bead.worktree.reap_skipped';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedEventStreamEnvelope bead.worktree.reaped
+ */
+export type TypedEventStreamEnvelopeBeadWorktreeReaped = {
+    actor: string;
+    message?: string;
+    payload: BeadWorktreeReapedPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'bead.worktree.reaped';
     workflow?: WorkflowEventProjection;
 };
 
@@ -4304,6 +4350,10 @@ export type TypedTaggedEventStreamEnvelope = ({
 } & TypedTaggedEventStreamEnvelopeBeadDeleted) | ({
     type: 'bead.updated';
 } & TypedTaggedEventStreamEnvelopeBeadUpdated) | ({
+    type: 'bead.worktree.reap_skipped';
+} & TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped) | ({
+    type: 'bead.worktree.reaped';
+} & TypedTaggedEventStreamEnvelopeBeadWorktreeReaped) | ({
     type: 'city.created';
 } & TypedTaggedEventStreamEnvelopeCityCreated) | ({
     type: 'city.resumed';
@@ -4474,6 +4524,36 @@ export type TypedTaggedEventStreamEnvelopeBeadUpdated = {
     subject?: string;
     ts: string;
     type: 'bead.updated';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope bead.worktree.reap_skipped
+ */
+export type TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: BeadWorktreeReapSkippedPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'bead.worktree.reap_skipped';
+    workflow?: WorkflowEventProjection;
+};
+
+/**
+ * TypedTaggedEventStreamEnvelope bead.worktree.reaped
+ */
+export type TypedTaggedEventStreamEnvelopeBeadWorktreeReaped = {
+    actor: string;
+    city: string;
+    message?: string;
+    payload: BeadWorktreeReapedPayload;
+    seq: number;
+    subject?: string;
+    ts: string;
+    type: 'bead.worktree.reaped';
     workflow?: WorkflowEventProjection;
 };
 

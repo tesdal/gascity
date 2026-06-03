@@ -37,6 +37,37 @@ type StoreMaintenanceFailedPayload struct {
 // IsEventPayload marks StoreMaintenanceFailedPayload as an events.Payload variant.
 func (StoreMaintenanceFailedPayload) IsEventPayload() {}
 
+// BeadWorktreeReapedPayload is the typed payload for bead.worktree.reaped
+// events. Emitted when the worktree reaper successfully removes a merged
+// worktree and its branch after a bead is closed.
+type BeadWorktreeReapedPayload struct {
+	BeadID string `json:"bead_id"`
+	Path   string `json:"path"`
+	Rig    string `json:"rig"`
+	Branch string `json:"branch"`
+}
+
+// IsEventPayload marks BeadWorktreeReapedPayload as an events.Payload variant.
+func (BeadWorktreeReapedPayload) IsEventPayload() {}
+
+// BeadWorktreeReapSkippedPayload is the typed payload for
+// bead.worktree.reap_skipped events. Emitted when the worktree reaper
+// decides not to remove a worktree (e.g., unmerged changes, open bead).
+type BeadWorktreeReapSkippedPayload struct {
+	BeadID string `json:"bead_id"`
+	Path   string `json:"path"`
+	Rig    string `json:"rig"`
+	Reason string `json:"reason"`
+}
+
+// IsEventPayload marks BeadWorktreeReapSkippedPayload as an events.Payload variant.
+func (BeadWorktreeReapSkippedPayload) IsEventPayload() {}
+
+func init() {
+	RegisterPayload(BeadWorktreeReaped, BeadWorktreeReapedPayload{})
+	RegisterPayload(BeadWorktreeReapSkipped, BeadWorktreeReapSkippedPayload{})
+}
+
 // SessionResetStalledPayload is the typed payload for
 // session.reset_stalled events. It identifies the session whose reset
 // completion has stalled and the reset timestamp used to compute the

@@ -628,6 +628,22 @@ type BeadUpdateBody struct {
 	Type *string `json:"type,omitempty"`
 }
 
+// BeadWorktreeReapSkippedPayload defines model for BeadWorktreeReapSkippedPayload.
+type BeadWorktreeReapSkippedPayload struct {
+	BeadId string `json:"bead_id"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+	Rig    string `json:"rig"`
+}
+
+// BeadWorktreeReapedPayload defines model for BeadWorktreeReapedPayload.
+type BeadWorktreeReapedPayload struct {
+	BeadId string `json:"bead_id"`
+	Branch string `json:"branch"`
+	Path   string `json:"path"`
+	Rig    string `json:"rig"`
+}
+
 // BeadsDiagnostic defines model for BeadsDiagnostic.
 type BeadsDiagnostic struct {
 	BeadsStore          string  `json:"beads_store"`
@@ -3170,6 +3186,30 @@ type TypedEventStreamEnvelopeBeadUpdated struct {
 	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
 }
 
+// TypedEventStreamEnvelopeBeadWorktreeReapSkipped defines model for TypedEventStreamEnvelopeBeadWorktreeReapSkipped.
+type TypedEventStreamEnvelopeBeadWorktreeReapSkipped struct {
+	Actor    string                         `json:"actor"`
+	Message  *string                        `json:"message,omitempty"`
+	Payload  BeadWorktreeReapSkippedPayload `json:"payload"`
+	Seq      int64                          `json:"seq"`
+	Subject  *string                        `json:"subject,omitempty"`
+	Ts       time.Time                      `json:"ts"`
+	Type     string                         `json:"type"`
+	Workflow *WorkflowEventProjection       `json:"workflow,omitempty"`
+}
+
+// TypedEventStreamEnvelopeBeadWorktreeReaped defines model for TypedEventStreamEnvelopeBeadWorktreeReaped.
+type TypedEventStreamEnvelopeBeadWorktreeReaped struct {
+	Actor    string                    `json:"actor"`
+	Message  *string                   `json:"message,omitempty"`
+	Payload  BeadWorktreeReapedPayload `json:"payload"`
+	Seq      int64                     `json:"seq"`
+	Subject  *string                   `json:"subject,omitempty"`
+	Ts       time.Time                 `json:"ts"`
+	Type     string                    `json:"type"`
+	Workflow *WorkflowEventProjection  `json:"workflow,omitempty"`
+}
+
 // TypedEventStreamEnvelopeCityCreated defines model for TypedEventStreamEnvelopeCityCreated.
 type TypedEventStreamEnvelopeCityCreated struct {
 	Actor    string                   `json:"actor"`
@@ -3897,6 +3937,32 @@ type TypedTaggedEventStreamEnvelopeBeadUpdated struct {
 	Ts       time.Time                `json:"ts"`
 	Type     string                   `json:"type"`
 	Workflow *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped defines model for TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped.
+type TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped struct {
+	Actor    string                         `json:"actor"`
+	City     string                         `json:"city"`
+	Message  *string                        `json:"message,omitempty"`
+	Payload  BeadWorktreeReapSkippedPayload `json:"payload"`
+	Seq      int64                          `json:"seq"`
+	Subject  *string                        `json:"subject,omitempty"`
+	Ts       time.Time                      `json:"ts"`
+	Type     string                         `json:"type"`
+	Workflow *WorkflowEventProjection       `json:"workflow,omitempty"`
+}
+
+// TypedTaggedEventStreamEnvelopeBeadWorktreeReaped defines model for TypedTaggedEventStreamEnvelopeBeadWorktreeReaped.
+type TypedTaggedEventStreamEnvelopeBeadWorktreeReaped struct {
+	Actor    string                    `json:"actor"`
+	City     string                    `json:"city"`
+	Message  *string                   `json:"message,omitempty"`
+	Payload  BeadWorktreeReapedPayload `json:"payload"`
+	Seq      int64                     `json:"seq"`
+	Subject  *string                   `json:"subject,omitempty"`
+	Ts       time.Time                 `json:"ts"`
+	Type     string                    `json:"type"`
+	Workflow *WorkflowEventProjection  `json:"workflow,omitempty"`
 }
 
 // TypedTaggedEventStreamEnvelopeCityCreated defines model for TypedTaggedEventStreamEnvelopeCityCreated.
@@ -5909,6 +5975,58 @@ func (t *EventPayload) MergeBeadEventPayload(v BeadEventPayload) error {
 	return err
 }
 
+// AsBeadWorktreeReapSkippedPayload returns the union data inside the EventPayload as a BeadWorktreeReapSkippedPayload
+func (t EventPayload) AsBeadWorktreeReapSkippedPayload() (BeadWorktreeReapSkippedPayload, error) {
+	var body BeadWorktreeReapSkippedPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBeadWorktreeReapSkippedPayload overwrites any union data inside the EventPayload as the provided BeadWorktreeReapSkippedPayload
+func (t *EventPayload) FromBeadWorktreeReapSkippedPayload(v BeadWorktreeReapSkippedPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBeadWorktreeReapSkippedPayload performs a merge with any union data inside the EventPayload, using the provided BeadWorktreeReapSkippedPayload
+func (t *EventPayload) MergeBeadWorktreeReapSkippedPayload(v BeadWorktreeReapSkippedPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBeadWorktreeReapedPayload returns the union data inside the EventPayload as a BeadWorktreeReapedPayload
+func (t EventPayload) AsBeadWorktreeReapedPayload() (BeadWorktreeReapedPayload, error) {
+	var body BeadWorktreeReapedPayload
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBeadWorktreeReapedPayload overwrites any union data inside the EventPayload as the provided BeadWorktreeReapedPayload
+func (t *EventPayload) FromBeadWorktreeReapedPayload(v BeadWorktreeReapedPayload) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBeadWorktreeReapedPayload performs a merge with any union data inside the EventPayload, using the provided BeadWorktreeReapedPayload
+func (t *EventPayload) MergeBeadWorktreeReapedPayload(v BeadWorktreeReapedPayload) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsBoundEventPayload returns the union data inside the EventPayload as a BoundEventPayload
 func (t EventPayload) AsBoundEventPayload() (BoundEventPayload, error) {
 	var body BoundEventPayload
@@ -6759,6 +6877,62 @@ func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeBeadUpdated(v Typ
 // MergeTypedEventStreamEnvelopeBeadUpdated performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeBeadUpdated
 func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeBeadUpdated(v TypedEventStreamEnvelopeBeadUpdated) error {
 	v.Type = "bead.updated"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeBeadWorktreeReapSkipped returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeBeadWorktreeReapSkipped() (TypedEventStreamEnvelopeBeadWorktreeReapSkipped, error) {
+	var body TypedEventStreamEnvelopeBeadWorktreeReapSkipped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeBeadWorktreeReapSkipped overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeBeadWorktreeReapSkipped(v TypedEventStreamEnvelopeBeadWorktreeReapSkipped) error {
+	v.Type = "bead.worktree.reap_skipped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeBeadWorktreeReapSkipped performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeBeadWorktreeReapSkipped(v TypedEventStreamEnvelopeBeadWorktreeReapSkipped) error {
+	v.Type = "bead.worktree.reap_skipped"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedEventStreamEnvelopeBeadWorktreeReaped returns the union data inside the TypedEventStreamEnvelope as a TypedEventStreamEnvelopeBeadWorktreeReaped
+func (t TypedEventStreamEnvelope) AsTypedEventStreamEnvelopeBeadWorktreeReaped() (TypedEventStreamEnvelopeBeadWorktreeReaped, error) {
+	var body TypedEventStreamEnvelopeBeadWorktreeReaped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedEventStreamEnvelopeBeadWorktreeReaped overwrites any union data inside the TypedEventStreamEnvelope as the provided TypedEventStreamEnvelopeBeadWorktreeReaped
+func (t *TypedEventStreamEnvelope) FromTypedEventStreamEnvelopeBeadWorktreeReaped(v TypedEventStreamEnvelopeBeadWorktreeReaped) error {
+	v.Type = "bead.worktree.reaped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedEventStreamEnvelopeBeadWorktreeReaped performs a merge with any union data inside the TypedEventStreamEnvelope, using the provided TypedEventStreamEnvelopeBeadWorktreeReaped
+func (t *TypedEventStreamEnvelope) MergeTypedEventStreamEnvelopeBeadWorktreeReaped(v TypedEventStreamEnvelopeBeadWorktreeReaped) error {
+	v.Type = "bead.worktree.reaped"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -8361,6 +8535,10 @@ func (t TypedEventStreamEnvelope) ValueByDiscriminator() (interface{}, error) {
 		return t.AsTypedEventStreamEnvelopeBeadDeleted()
 	case "bead.updated":
 		return t.AsTypedEventStreamEnvelopeBeadUpdated()
+	case "bead.worktree.reap_skipped":
+		return t.AsTypedEventStreamEnvelopeBeadWorktreeReapSkipped()
+	case "bead.worktree.reaped":
+		return t.AsTypedEventStreamEnvelopeBeadWorktreeReaped()
 	case "city.created":
 		return t.AsTypedEventStreamEnvelopeCityCreated()
 	case "city.resumed":
@@ -8588,6 +8766,62 @@ func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeBeadU
 // MergeTypedTaggedEventStreamEnvelopeBeadUpdated performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeBeadUpdated
 func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeBeadUpdated(v TypedTaggedEventStreamEnvelopeBeadUpdated) error {
 	v.Type = "bead.updated"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped() (TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped, error) {
+	var body TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped(v TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped) error {
+	v.Type = "bead.worktree.reap_skipped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped(v TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped) error {
+	v.Type = "bead.worktree.reap_skipped"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTypedTaggedEventStreamEnvelopeBeadWorktreeReaped returns the union data inside the TypedTaggedEventStreamEnvelope as a TypedTaggedEventStreamEnvelopeBeadWorktreeReaped
+func (t TypedTaggedEventStreamEnvelope) AsTypedTaggedEventStreamEnvelopeBeadWorktreeReaped() (TypedTaggedEventStreamEnvelopeBeadWorktreeReaped, error) {
+	var body TypedTaggedEventStreamEnvelopeBeadWorktreeReaped
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTypedTaggedEventStreamEnvelopeBeadWorktreeReaped overwrites any union data inside the TypedTaggedEventStreamEnvelope as the provided TypedTaggedEventStreamEnvelopeBeadWorktreeReaped
+func (t *TypedTaggedEventStreamEnvelope) FromTypedTaggedEventStreamEnvelopeBeadWorktreeReaped(v TypedTaggedEventStreamEnvelopeBeadWorktreeReaped) error {
+	v.Type = "bead.worktree.reaped"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTypedTaggedEventStreamEnvelopeBeadWorktreeReaped performs a merge with any union data inside the TypedTaggedEventStreamEnvelope, using the provided TypedTaggedEventStreamEnvelopeBeadWorktreeReaped
+func (t *TypedTaggedEventStreamEnvelope) MergeTypedTaggedEventStreamEnvelopeBeadWorktreeReaped(v TypedTaggedEventStreamEnvelopeBeadWorktreeReaped) error {
+	v.Type = "bead.worktree.reaped"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -10190,6 +10424,10 @@ func (t TypedTaggedEventStreamEnvelope) ValueByDiscriminator() (interface{}, err
 		return t.AsTypedTaggedEventStreamEnvelopeBeadDeleted()
 	case "bead.updated":
 		return t.AsTypedTaggedEventStreamEnvelopeBeadUpdated()
+	case "bead.worktree.reap_skipped":
+		return t.AsTypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped()
+	case "bead.worktree.reaped":
+		return t.AsTypedTaggedEventStreamEnvelopeBeadWorktreeReaped()
 	case "city.created":
 		return t.AsTypedTaggedEventStreamEnvelopeCityCreated()
 	case "city.resumed":

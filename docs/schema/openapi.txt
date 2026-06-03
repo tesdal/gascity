@@ -1097,6 +1097,54 @@
         },
         "type": "object"
       },
+      "BeadWorktreeReapSkippedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "bead_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rig": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bead_id",
+          "path",
+          "rig",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "BeadWorktreeReapedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "bead_id": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rig": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bead_id",
+          "path",
+          "rig",
+          "branch"
+        ],
+        "type": "object"
+      },
       "BeadsDiagnostic": {
         "additionalProperties": false,
         "properties": {
@@ -2093,6 +2141,12 @@
           },
           {
             "$ref": "#/components/schemas/BeadEventPayload"
+          },
+          {
+            "$ref": "#/components/schemas/BeadWorktreeReapSkippedPayload"
+          },
+          {
+            "$ref": "#/components/schemas/BeadWorktreeReapedPayload"
           },
           {
             "$ref": "#/components/schemas/BoundEventPayload"
@@ -7603,6 +7657,8 @@
             "bead.created": "#/components/schemas/TypedEventStreamEnvelopeBeadCreated",
             "bead.deleted": "#/components/schemas/TypedEventStreamEnvelopeBeadDeleted",
             "bead.updated": "#/components/schemas/TypedEventStreamEnvelopeBeadUpdated",
+            "bead.worktree.reap_skipped": "#/components/schemas/TypedEventStreamEnvelopeBeadWorktreeReapSkipped",
+            "bead.worktree.reaped": "#/components/schemas/TypedEventStreamEnvelopeBeadWorktreeReaped",
             "city.created": "#/components/schemas/TypedEventStreamEnvelopeCityCreated",
             "city.resumed": "#/components/schemas/TypedEventStreamEnvelopeCityResumed",
             "city.suspended": "#/components/schemas/TypedEventStreamEnvelopeCitySuspended",
@@ -7673,6 +7729,12 @@
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeBeadUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeBeadWorktreeReapSkipped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedEventStreamEnvelopeBeadWorktreeReaped"
           },
           {
             "$ref": "#/components/schemas/TypedEventStreamEnvelopeCityCreated"
@@ -8011,6 +8073,90 @@
           "payload"
         ],
         "title": "TypedEventStreamEnvelope bead.updated",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeBeadWorktreeReapSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/BeadWorktreeReapSkippedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "bead.worktree.reap_skipped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope bead.worktree.reap_skipped",
+        "type": "object"
+      },
+      "TypedEventStreamEnvelopeBeadWorktreeReaped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/BeadWorktreeReapedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "bead.worktree.reaped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload"
+        ],
+        "title": "TypedEventStreamEnvelope bead.worktree.reaped",
         "type": "object"
       },
       "TypedEventStreamEnvelopeCityCreated": {
@@ -8393,6 +8539,8 @@
                 "bead.closed",
                 "bead.deleted",
                 "bead.updated",
+                "bead.worktree.reaped",
+                "bead.worktree.reap_skipped",
                 "mail.sent",
                 "mail.read",
                 "mail.archived",
@@ -10433,6 +10581,8 @@
             "bead.created": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadCreated",
             "bead.deleted": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadDeleted",
             "bead.updated": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadUpdated",
+            "bead.worktree.reap_skipped": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped",
+            "bead.worktree.reaped": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadWorktreeReaped",
             "city.created": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityCreated",
             "city.resumed": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityResumed",
             "city.suspended": "#/components/schemas/TypedTaggedEventStreamEnvelopeCitySuspended",
@@ -10503,6 +10653,12 @@
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped"
+          },
+          {
+            "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeBeadWorktreeReaped"
           },
           {
             "$ref": "#/components/schemas/TypedTaggedEventStreamEnvelopeCityCreated"
@@ -10857,6 +11013,98 @@
           "city"
         ],
         "title": "TypedTaggedEventStreamEnvelope bead.updated",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeBeadWorktreeReapSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/BeadWorktreeReapSkippedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "bead.worktree.reap_skipped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope bead.worktree.reap_skipped",
+        "type": "object"
+      },
+      "TypedTaggedEventStreamEnvelopeBeadWorktreeReaped": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/BeadWorktreeReapedPayload"
+          },
+          "seq": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "ts": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "const": "bead.worktree.reaped",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowEventProjection"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "ts",
+          "actor",
+          "payload",
+          "city"
+        ],
+        "title": "TypedTaggedEventStreamEnvelope bead.worktree.reaped",
         "type": "object"
       },
       "TypedTaggedEventStreamEnvelopeCityCreated": {
@@ -11274,6 +11522,8 @@
                 "bead.closed",
                 "bead.deleted",
                 "bead.updated",
+                "bead.worktree.reaped",
+                "bead.worktree.reap_skipped",
                 "mail.sent",
                 "mail.read",
                 "mail.archived",

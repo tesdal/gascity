@@ -17,24 +17,26 @@ import (
 
 // Event type constants. Only types we actually emit today.
 const (
-	SessionWoke        = "session.woke"
-	SessionStopped     = "session.stopped"
-	SessionCrashed     = "session.crashed"
-	BeadCreated        = "bead.created"
-	BeadClosed         = "bead.closed"
-	BeadDeleted        = "bead.deleted"
-	BeadUpdated        = "bead.updated"
-	MailSent           = "mail.sent"
-	MailRead           = "mail.read"
-	MailArchived       = "mail.archived"
-	MailMarkedRead     = "mail.marked_read"
-	MailMarkedUnread   = "mail.marked_unread"
-	MailReplied        = "mail.replied"
-	MailDeleted        = "mail.deleted"
-	SessionDraining    = "session.draining"
-	SessionUndrained   = "session.undrained"
-	SessionQuarantined = "session.quarantined"
-	SessionIdleKilled  = "session.idle_killed"
+	SessionWoke             = "session.woke"
+	SessionStopped          = "session.stopped"
+	SessionCrashed          = "session.crashed"
+	BeadCreated             = "bead.created"
+	BeadClosed              = "bead.closed"
+	BeadDeleted             = "bead.deleted"
+	BeadUpdated             = "bead.updated"
+	BeadWorktreeReaped      = "bead.worktree.reaped"
+	BeadWorktreeReapSkipped = "bead.worktree.reap_skipped"
+	MailSent                = "mail.sent"
+	MailRead                = "mail.read"
+	MailArchived            = "mail.archived"
+	MailMarkedRead          = "mail.marked_read"
+	MailMarkedUnread        = "mail.marked_unread"
+	MailReplied             = "mail.replied"
+	MailDeleted             = "mail.deleted"
+	SessionDraining         = "session.draining"
+	SessionUndrained        = "session.undrained"
+	SessionQuarantined      = "session.quarantined"
+	SessionIdleKilled       = "session.idle_killed"
 	// SessionMaxAgeKilled fires when the controller preemptively restarts a
 	// long-running session because its wall-clock age exceeded the agent's
 	// max_session_age threshold. Motivating case: provider SDKs that cache
@@ -159,6 +161,7 @@ var KnownEventTypes = []string{
 	SessionWorkQueryFailed,
 	SessionColdStartTimeout,
 	BeadCreated, BeadClosed, BeadDeleted, BeadUpdated,
+	BeadWorktreeReaped, BeadWorktreeReapSkipped,
 	MailSent, MailRead, MailArchived, MailMarkedRead, MailMarkedUnread,
 	MailReplied, MailDeleted,
 	ConvoyCreated, ConvoyClosed,
