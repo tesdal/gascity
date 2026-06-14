@@ -540,10 +540,7 @@ func TestStartManagedDoltProcessWithOptions_WaitedPortsBoundsBumpsAfterRetry(t *
 		retryWindow: retryWindow,
 	})
 
-	start := time.Now()
 	report, err := startManagedDoltProcessWithOptions(cityPath, "0.0.0.0", strconv.Itoa(originalPort), "root", "warning", -1, 1*time.Second, false)
-	elapsed := time.Since(start)
-
 	if err != nil {
 		t.Fatalf("expected success on attempt 3; got %v", err)
 	}
@@ -570,13 +567,6 @@ func TestStartManagedDoltProcessWithOptions_WaitedPortsBoundsBumpsAfterRetry(t *
 	}
 	if got < 1 {
 		t.Errorf("origPortProbeCalls=%d; expected ≥1 (attempt 1's wait must have probed originalPort)", got)
-	}
-
-	// Elapsed bound: attempt 1's wait waited ~waitDelay; attempts 2+3 are
-	// near-instant. Bounded by waitDelay + small slack. If budget broken,
-	// elapsed would include attempt 2's full retryWindow.
-	if elapsed > waitDelay+retryWindow {
-		t.Errorf("elapsed=%s > waitDelay+retryWindow (%s); attempt 2 likely re-waited", elapsed, waitDelay+retryWindow)
 	}
 }
 

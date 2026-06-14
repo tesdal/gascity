@@ -1112,6 +1112,10 @@ if [ -d "$CITY_BEADS_DIR" ]; then
     SESSION_PRUNE_ATTEMPTED=1
     if [ -n "$SESSION_BEAD_PATTERN" ]; then
         # ── bd prune path (existing behaviour, now pattern-configurable) ──────
+        SESSION_PRUNE_ANOMALY_SCOPE="session"
+        case "$SESSION_BEAD_PATTERN" in
+            *-*) SESSION_PRUNE_ANOMALY_SCOPE="${SESSION_BEAD_PATTERN%%-*}" ;;
+        esac
         BD_PRUNE_ARGS=(prune --pattern "$SESSION_BEAD_PATTERN" --older-than "$SESSION_PURGE_AGE")
         if [ -z "$DRY_RUN" ]; then BD_PRUNE_ARGS+=(--force); fi
         BD_PRUNE_ARGS+=(--json)
@@ -1121,7 +1125,7 @@ if [ -d "$CITY_BEADS_DIR" ]; then
         [ -z "$PRUNE_COUNT" ] && PRUNE_COUNT=0
         TOTAL_SESSIONS_PRUNED=$PRUNE_COUNT
         if [ "$PRUNE_COUNT" -gt 1000 ]; then
-            record_anomaly "session" "$PRUNE_COUNT closed session beads pruned (pattern=$SESSION_BEAD_PATTERN threshold: 1000)"
+            record_anomaly "$SESSION_PRUNE_ANOMALY_SCOPE" "$PRUNE_COUNT closed session beads pruned (pattern=$SESSION_BEAD_PATTERN threshold: 1000)"
         fi
     else
         # ── type-safe SQL path (issue_type=session only) ──────────────────────
