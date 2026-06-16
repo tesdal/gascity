@@ -370,6 +370,9 @@ func IsTransientControllerError(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
+	if isTransientWorkQueryFailure(msg) {
+		return true
+	}
 	transientNeedles := []string{
 		"i/o timeout",
 		"context deadline exceeded",
@@ -387,6 +390,25 @@ func IsTransientControllerError(err error) bool {
 		"sqlite_busy",
 	}
 	for _, needle := range transientNeedles {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTransientWorkQueryFailure(msg string) bool {
+	if !strings.Contains(msg, "running work query") {
+		return false
+	}
+	workQueryNeedles := []string{
+		"signal: killed",
+		"signal: terminated",
+		"exit status 137",
+		"exit status 143",
+		"timed out after",
+	}
+	for _, needle := range workQueryNeedles {
 		if strings.Contains(msg, needle) {
 			return true
 		}
