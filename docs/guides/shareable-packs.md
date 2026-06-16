@@ -96,8 +96,12 @@ Prompt file discovery prefers `prompt.template.md`. `prompt.md` and
 
 ## Imports
 
-Packs compose other packs with named imports. Imports preserve provenance, so
-consumers can distinguish `gastown.polecat` from `review.polecat`.
+Packs compose other packs with named imports. The `[imports.<binding>]` key is
+the local binding you choose; it qualifies the imported agents' names so
+`gastown.polecat` and `review.polecat` coexist. See
+[Understanding Packs](/guides/understanding-packs#names) for how bindings,
+qualified names, and collisions work — this section is about *authoring* the
+imports.
 
 ```toml
 [imports.review]
@@ -117,18 +121,6 @@ version = "sha:fa91a3b4f1fe5cc9d1ba9ffbdd2d26274680adf9"
 Do not write registry handles such as `main:gastown` into `pack.toml`. Registry
 handles are command-time lookup shortcuts; authored pack TOML stores the
 resolved durable `source` and, when needed, `version`.
-
-Packs own their agents. Collision detection keys on the binding-qualified
-name, so two imports that each define a `polecat` agent coexist as
-`gastown.polecat` and `review.polecat`. Composition fails with a
-duplicate-agent error only when two source directories produce the same
-qualified name on the same surface — for example, two unbound legacy includes
-that both define `polecat` — and there is no fallback-agent resolution.
-
-The `[imports.<name>]` key is the local binding chosen by the importing pack.
-An imported pack's own name, or the name displayed in a registry, is display
-metadata and a suggested binding only. It does not override the import
-binding.
 
 ## Registry Discovery
 
