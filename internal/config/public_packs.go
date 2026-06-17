@@ -61,6 +61,7 @@ var SupersededPublicGastownPackVersions = []string{
 	"sha:d3617d1319a1206ac85f69ba024ec395c49c6f4b",
 	"sha:fa91a3b4f1fe5cc9d1ba9ffbdd2d26274680adf9",
 	"sha:4212acb7046c11f6f633df73307006493185233a",
+	"sha:342bcfb0775ad79d2c67df3b235edf70a0a7e372",
 }
 
 // SupersededPublicGascityPackVersions is the gascity-pack counterpart of
