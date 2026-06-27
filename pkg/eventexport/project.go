@@ -11,6 +11,23 @@
 // or non-allowlisted event type is dropped, and the envelope is a closed struct
 // so a newly-added source field can never escape by default.
 //
+// EXCEPTION (opt-in): two envelope fields — Title and Formula — carry free-form
+// content (a bead's human title; a run's formula name). They are the deliberate
+// reversal of the envelope-only default, emitted ONLY when the package-internal
+// content opt-in is set, length-capped, and never on a mail-reduced type. With
+// the opt-in unset (the default) the projection stays envelope-only and no
+// content leaves the box.
+//
+// This is the RECEIVER-READY half of a staged rollout: the projection accepts,
+// gates, length-caps, and validates Title/Formula so a receiver can parse and
+// trust-check populated batches, but the producer half is deliberately absent.
+// The content opt-in (Options.emitContent) is UNEXPORTED, the Exporter Config
+// carries no content knob, and the eventfeed adapter does not source the fields,
+// so no out-of-package caller of ProjectEvent can enable content and nothing can
+// egress end to end today BY DESIGN. Exposing a reachable operator opt-in and the
+// typed source fields through the producer path — and the SchemaVersion decision
+// that reachable content egress then requires — is tracked separately (ga-mt1e99).
+//
 // The package imports only the standard library. The supervisor-coupled event
 // source (which knows about internal/events) lives in a separate adapter so
 // this package stays a dependency-light, OSS-consumable projection contract.
@@ -31,11 +48,28 @@ import (
 )
 
 // SchemaVersion is stamped on every batch so the receiver can evolve the
-// projection without a flag day. Bump it whenever a change alters the wire bytes
-// OR the redaction policy (e.g. widening the type allowlist — see the allowlist
-// golden test), so a downstream consumer pinned to an older version rejects the
-// batch loudly (ValidateBatch -> ErrSchemaMismatch) instead of mis-handling it.
-// A pure refactor that leaves bytes and policy identical does NOT bump.
+// projection without a flag day. Bump it whenever a change alters the DEFAULT
+// wire bytes OR the DEFAULT redaction policy (e.g. widening the type allowlist —
+// see the allowlist golden test), so a downstream consumer pinned to an older
+// version rejects the batch loudly (ValidateBatch -> ErrSchemaMismatch) instead
+// of mis-handling it. A pure refactor that leaves bytes and policy identical does
+// NOT bump.
+//
+// Off-by-default opt-in exemption: an OPTIONAL field that is gated behind a
+// default-false, package-private producer flag and is omitempty does NOT bump on
+// its own. With the flag off — the default every existing receiver sees — the wire
+// bytes and the redaction policy are byte-identical (the golden wire test proves
+// the empty field is omitted), so an old receiver's batches are unchanged. The
+// version describes the DEFAULT contract; a field no reachable producer can turn
+// on yet has not changed it. This is why Title/Formula (gated by the UNEXPORTED
+// Options.emitContent, default false, with no reachable Config knob on the
+// Exporter) were added without a bump: because the opt-in is package-private, no
+// out-of-package importer of ProjectEvent can enable content, so the exemption is
+// compiler-enforced rather than a convention. The forcing function moves to the
+// producer: when a future change exposes a reachable content opt-in (the
+// eventfeed/cmd producer path — see ga-mt1e99), that change owns the decision of
+// whether reachable content egress warrants a bump and the receiver coordination
+// it implies.
 //
 // v2 replaced the cleartext city_id with a salted, non-reversible city_hash so
 // an operator-chosen city name (which can itself embed a customer/org
@@ -55,8 +89,9 @@ const (
 )
 
 const (
-	maxRefLen  = 64 // run_id/session_id/ref over this are DROPPED, not truncated.
-	minSaltLen = 16 // below this the salted actor hash is brute-forceable; fail closed.
+	maxRefLen     = 64  // run_id/session_id/ref over this are DROPPED, not truncated.
+	minSaltLen    = 16  // below this the salted actor hash is brute-forceable; fail closed.
+	maxContentLen = 256 // free-form title/formula over this are DROPPED, not truncated.
 )
 
 // allowedTypes is the default-deny allowlist of exportable event types, keyed by
@@ -131,7 +166,17 @@ type Envelope struct {
 	Ref       string `json:"ref,omitempty"`        // id-regex-gated reference (opaque id/slug only)
 	RunID     string `json:"run_id,omitempty"`     // opaque run-root correlation id (safeRef-gated)
 	SessionID string `json:"session_id,omitempty"` // opaque session correlation id (safeRef-gated)
-	StepID    string `json:"step_id,omitempty"`    // opaque acting-work-bead (run step) id (safeRef-gated)
+	StepID    string `json:"step_id,omitempty"`    // opaque acting-work-bead (run step) id; safeRef-gated, EmitCorrelation
+	// Title/Formula are the DELIBERATE exception to envelope-only: free-form content
+	// (a bead's human title; a run's formula name), gated by the package-internal
+	// content opt-in (Options.emitContent), length-capped (dropped, not truncated),
+	// and NOT routed through the opaque-id machinery. They ship empty unless it is set.
+	Title   string `json:"title,omitempty"`
+	Formula string `json:"formula,omitempty"`
+	// Force keyed literals so a positional Envelope{...} can never transpose the two
+	// adjacent free-form content fields (or land content in an opaque-id slot) at the
+	// redaction boundary; mirrors TaggedEvent. Unexported + blank, so json ignores it.
+	_ struct{}
 }
 
 // Batch is one POST body: the events for a single city. CityHash is a salted,
@@ -144,11 +189,21 @@ type Batch struct {
 }
 
 // Options controls the projection.
+//
+// emitContent is UNEXPORTED on purpose: it is the content opt-in that reverses
+// the envelope-only default, and keeping it package-private is what makes the
+// SchemaVersion no-bump exemption sound. An out-of-package importer constructs
+// Options with keyed literals and so CANNOT enable content, which means no caller
+// of the exported ProjectEvent can emit Title/Formula on a SchemaVersion==2
+// batch. The field exists only for in-package projection tests and the future
+// producer path (ga-mt1e99), which owns exposing a reachable opt-in and the
+// SchemaVersion decision that reachable content egress then requires.
 type Options struct {
 	Salt            []byte  // actor-hash salt; must be >= 16 bytes (ProjectEvent fails closed otherwise)
 	ExportRef       bool    // include the id-gated ref (opaque ids/slugs only)
 	Profile         Profile // redaction profile (default ProfileRedactedEnvelope)
-	EmitCorrelation bool    // emit opaque run_id/session_id; default false (the production export sets it true)
+	EmitCorrelation bool    // emit opaque run_id/session_id/step_id; default false (the production export sets it true)
+	emitContent     bool    // emit free-form Title/Formula; default false. REVERSES the envelope-only default. UNEXPORTED so no out-of-package caller can enable content egress; the reachable producer opt-in is staged (ga-mt1e99).
 }
 
 // ActorHash returns a salted, non-reversible, 16-hex fingerprint of an actor.
@@ -225,6 +280,18 @@ func ProjectEvent(te TaggedEvent, opt Options) (Envelope, bool) {
 			env.StepID = st
 		}
 	}
+	// Content fields are the deliberate exception to the envelope-only default:
+	// gated by the package-internal emitContent (NOT the opaque-id machinery),
+	// length-capped (dropped, not truncated), and — via the mailReduced
+	// early-return above — never on a mail-reduced type.
+	if opt.emitContent {
+		if t := capContent(te.Title); t != "" {
+			env.Title = t
+		}
+		if f := capContent(te.Formula); f != "" {
+			env.Formula = f
+		}
+	}
 	return env, true
 }
 
@@ -245,7 +312,7 @@ func ValidateEnvelope(env Envelope) error {
 		return fmt.Errorf("eventexport: invalid ts %q", env.TS)
 	}
 	if mailReduced[env.Type] {
-		if env.ActorHash != "" || env.Ref != "" || env.RunID != "" || env.SessionID != "" || env.StepID != "" {
+		if env.ActorHash != "" || env.Ref != "" || env.RunID != "" || env.SessionID != "" || env.StepID != "" || env.Title != "" || env.Formula != "" {
 			return fmt.Errorf("eventexport: %q must carry only {seq,type,ts}", env.Type)
 		}
 		return nil
@@ -270,13 +337,23 @@ func ValidateEnvelope(env Envelope) error {
 	if env.StepID != "" && !IsOpaqueRef(env.StepID) {
 		return fmt.Errorf("eventexport: step_id %q is not an opaque id", env.StepID)
 	}
+	// Title/Formula are free-form content (the content opt-in exception): the wire
+	// invariant is a length bound, NOT opaqueness — charset is unrestricted.
+	if len(env.Title) > maxContentLen {
+		return fmt.Errorf("eventexport: title exceeds %d bytes", maxContentLen)
+	}
+	if len(env.Formula) > maxContentLen {
+		return fmt.Errorf("eventexport: formula exceeds %d bytes", maxContentLen)
+	}
 	return nil
 }
 
 // Validate is the producer's defense-in-depth self-check: ValidateEnvelope plus
-// the producer-only policy that a ref is present only when opt.ExportRef is set,
-// under the configured profile. Receivers must use ValidateEnvelope/ValidateBatch
-// instead — they do not depend on producer Options, which are not on the wire.
+// the producer-only policies that a ref is present only when opt.ExportRef is set
+// and that free-form Title/Formula are present only when opt.emitContent is set,
+// under the configured profile. Both are producer knobs that are NOT on the wire,
+// so receivers must use ValidateEnvelope/ValidateBatch instead — those do not
+// depend on producer Options.
 func Validate(env Envelope, opt Options) error {
 	if opt.Profile != ProfileRedactedEnvelope {
 		return fmt.Errorf("eventexport: unknown profile %d", opt.Profile)
@@ -286,6 +363,13 @@ func Validate(env Envelope, opt Options) error {
 	}
 	if env.Ref != "" && !opt.ExportRef {
 		return errors.New("eventexport: ref present but ExportRef disabled")
+	}
+	// Symmetric with the ExportRef check: content must never be present unless the
+	// producer opted into it. A populated Title/Formula with the content opt-in off
+	// means the envelope was built outside ProjectEvent's content gate — fail the
+	// self-check rather than ship content the operator never enabled.
+	if (env.Title != "" || env.Formula != "") && !opt.emitContent {
+		return errors.New("eventexport: title/formula present but content opt-in disabled")
 	}
 	return nil
 }
@@ -343,6 +427,17 @@ func safeRef(s string) string {
 	first := s[0]
 	firstAlnum := (first >= 'a' && first <= 'z') || (first >= '0' && first <= '9')
 	if !firstAlnum {
+		return ""
+	}
+	return s
+}
+
+// capContent returns s iff it is non-empty and within the content length bound;
+// an over-cap value is DROPPED (not truncated — a half-string is worse than
+// absent). Unlike safeRef it does NOT restrict the charset: Title/Formula are
+// free text by design (the content opt-in exception to the envelope-only contract).
+func capContent(s string) string {
+	if s == "" || len(s) > maxContentLen {
 		return ""
 	}
 	return s
