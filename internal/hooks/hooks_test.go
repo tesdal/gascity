@@ -377,6 +377,62 @@ func TestInstallCodexUpgradesSessionStartMissingManagedMarker(t *testing.T) {
 	}
 }
 
+func TestInstallCodexDedupesManagedSessionStartDrift(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/work/.codex/hooks.json"] = []byte(`{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex"
+      }]
+    }, {
+      "matcher": "startup",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex"
+      }]
+    }, {
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc hook run --timeout 15s --timeout-exit-code 0 -- prime --hook --hook-format codex"
+      }]
+    }],
+    "UserPromptSubmit": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc hook run --timeout 15s --timeout-exit-code 0 -- nudge drain --inject --hook-format codex"
+      }, {
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc hook run --timeout 15s --timeout-exit-code 0 -- mail check --inject --hook-format codex"
+      }]
+    }]
+  }
+}`)
+
+	if err := Install(fs, "/city", "/work", []string{"codex"}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	entries := claudeHookEntries(t, fs.Files["/work/.codex/hooks.json"], "SessionStart")
+	if len(entries) != 1 {
+		t.Fatalf("SessionStart entries = %d, want 1:\n%s", len(entries), string(fs.Files["/work/.codex/hooks.json"]))
+	}
+	if entries[0].Matcher != "startup" {
+		t.Fatalf("SessionStart matcher = %q, want startup", entries[0].Matcher)
+	}
+	sessionStartCommand := codexHookCommand(t, fs.Files["/work/.codex/hooks.json"], "SessionStart")
+	if !strings.Contains(sessionStartCommand, "GC_MANAGED_SESSION_HOOK=1") {
+		t.Fatalf("SessionStart missing managed marker: %s", sessionStartCommand)
+	}
+	if strings.Contains(string(fs.Files["/work/.codex/hooks.json"]), "gc hook run --timeout 15s --timeout-exit-code 0 -- prime --hook") {
+		t.Fatalf("legacy hook-run prime SessionStart survived:\n%s", string(fs.Files["/work/.codex/hooks.json"]))
+	}
+}
+
 func TestInstallCodexUpgradesManagedFileMissingPreCompact(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Files["/work/.codex/hooks.json"] = []byte(`{

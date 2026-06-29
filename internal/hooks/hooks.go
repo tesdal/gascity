@@ -647,6 +647,9 @@ func upgradeCodexHooks(existing, desired []byte) ([]byte, bool, error) {
 	hasManagedCommand := codexHookValueHasManagedCommand(root)
 	needsPreCompact := codexHookDocCanAddPreCompact(root)
 	changed := upgradeCodexHookValue(root)
+	if desiredCodexPreCompactHook(desired) != nil && normalizeCodexManagedHookEntries(root) {
+		changed = true
+	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
 	}
@@ -667,6 +670,9 @@ func normalizeCodexHookCommands(existing []byte) ([]byte, bool, error) {
 	}
 	hasManagedCommand := codexHookValueHasManagedCommand(root)
 	changed := upgradeCodexHookValue(root)
+	if normalizeCodexManagedHookEntries(root) {
+		changed = true
+	}
 	data, err := overlay.MarshalCanonicalJSON(root)
 	if err != nil {
 		return nil, false, err
@@ -743,6 +749,82 @@ func upgradeCodexHookValue(v any) bool {
 	}
 }
 
+func normalizeCodexManagedHookEntries(root any) bool {
+	doc, ok := root.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooksMap, ok := doc["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for event, entriesValue := range hooksMap {
+		entries, ok := entriesValue.([]any)
+		if !ok {
+			continue
+		}
+		normalized := entries[:0]
+		seenManaged := map[string]bool{}
+		for _, entry := range entries {
+			if event == "SessionStart" {
+				if normalizeCodexManagedSessionStartEntry(entry) {
+					changed = true
+				}
+			}
+			if codexHookValueHasManagedCommand(entry) {
+				keyData, err := overlay.MarshalCanonicalJSON(entry)
+				if err == nil {
+					key := string(keyData)
+					if seenManaged[key] {
+						changed = true
+						continue
+					}
+					seenManaged[key] = true
+				}
+			}
+			normalized = append(normalized, entry)
+		}
+		if len(normalized) != len(entries) {
+			hooksMap[event] = normalized
+		}
+	}
+	return changed
+}
+
+func normalizeCodexManagedSessionStartEntry(entry any) bool {
+	entryMap, ok := entry.(map[string]any)
+	if !ok || !codexHookEntryHasCommandBody(entryMap, sessionStartCurrentFormBody) {
+		return false
+	}
+	if matcher, ok := entryMap["matcher"].(string); !ok || matcher != "startup" {
+		entryMap["matcher"] = "startup"
+		return true
+	}
+	return false
+}
+
+func codexHookEntryHasCommandBody(entry map[string]any, body string) bool {
+	hooksValue, ok := entry["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, hookValue := range hooksValue {
+		hookMap, ok := hookValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		command, ok := hookMap["command"].(string)
+		if !ok {
+			continue
+		}
+		if commandBodyAfterCanonicalPrefix(command) == body {
+			return true
+		}
+	}
+	return false
+}
+
 var codexManagedHookCommandNeedles = []string{
 	`gc prime --hook`,
 	`gc nudge drain --inject`,
@@ -767,6 +849,11 @@ func upgradeCodexHookCommand(command string) (string, bool) {
 		equalsLegacyCommandBody(body, `GC_HOOK_EVENT_NAME=SessionStart gc prime --hook`) ||
 		equalsLegacyCommandBody(body, `GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex`) ||
 		equalsLegacyCommandBody(body, sessionStartPreviousManagedFormBody) {
+		prefix := strings.TrimSuffix(command, body)
+		return prefix + sessionStartCurrentFormBody, true
+	}
+	if equalsLegacyCommandBody(body, managedPromptHookRunPrefix+`prime --hook`) ||
+		equalsLegacyCommandBody(body, managedPromptHookRunPrefix+`prime --hook --hook-format codex`) {
 		prefix := strings.TrimSuffix(command, body)
 		return prefix + sessionStartCurrentFormBody, true
 	}
