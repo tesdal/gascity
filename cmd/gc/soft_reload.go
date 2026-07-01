@@ -78,7 +78,7 @@ func formatSoftReloadFailedSessions(names []string) string {
 // The hash computation uses sessionCoreConfigForHash, the same canonical
 // reconciler drift-hash helper used by live and asleep drift detection.
 //
-// Returns accepted-session, failed-session, stale-drain-cancelation, and
+// Returns accepted-session, failed-session, stale-drain-cancellation, and
 // empty-desired-state diagnostics for the controller reply.
 func acceptConfigDriftAcrossSessions(
 	sessFront *session.InfoStore,
