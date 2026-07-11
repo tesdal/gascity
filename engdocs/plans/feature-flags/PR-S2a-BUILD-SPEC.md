@@ -161,11 +161,20 @@ other writer. **Recommended verdict (confirm against bd schema at build):** emul
 loop SHIPS; SQL path dropped unless the atomic revision bump is provable — record dated
 note in engdocs/plans/feature-flags/.
 
-## CachingStore forward-and-EVICT (S2-T8) — caching_store_writes.go
+## CachingStore forward-and-EVICT (S2-T8) — caching_store_writes.go (or a new
+## caching_store_conditional.go mirroring bdstore_conditional.go — writes.go is ~990
+## lines; PHASE6-HANDOFF.md D5 recommends the new file; record whichever is taken here)
 Forward to `c.backing` via `ConditionalWriterFor`; not implementing → typed unsupported.
 Cache rule (§8.5) DIVERGES from ReleaseIfCurrent's optimistic-patch else-branch (:138-180):
-CAS success + refresh ok → refresh; CAS success + refresh FAILED → `delete(c.beads,id)`
-+ dirty/deletedSeq/markFreshLocked/clearDependentReadyProjectionsLocked bookkeeping;
+CAS success + refresh ok → refresh; CAS success + refresh FAILED → EVICT =
+`delete(c.beads,id)` + `delete(c.deps,id)` + `c.dirty[id]=struct{}{}` +
+markFreshLocked/clearDependentReadyProjectionsLocked bookkeeping — **NEVER stamp
+`deletedSeq` on an evict** (Get short-circuits a deletedSeq id to ErrNotFound WITHOUT
+consulting backing, caching_store_reads.go:386-389 — the exact livelock the evict
+exists to break; only DeleteIfMatch SUCCESS stamps deletedSeq, mirroring Delete's
+full scrub). [Corrected 2026-07-11 during the Phase-6 handoff verification pass: an
+earlier revision of this line listed "dirty/deletedSeq/..." as evict bookkeeping,
+which contradicts DESIGN §8.5 and the Get semantics.]
 EVERY `PreconditionFailedError` from backing → evict (cached revision proven stale).
 NEVER patch a cached bead after a conditional write. **MERGE GATE test:**
 `TestCachingStoreCASRetryLoopConverges` (CAS succeeds, refresh forced to fail once →
@@ -180,7 +189,7 @@ Compile assert `var _ ConditionalWriter = (*CachingStore)(nil)`.
 | 3 | S2-T3 | memstore.go, filestore.go, memstore_test.go, filestore_test.go | conformance over Mem/File |
 | 4 | S2-T4/T5 | bdstore_conditional.go, bdstore.go, bdstore_conditional_internal_test.go | classifier table + probe |
 | 5 | S2-T6/T7 | bdstore_conditional.go, bdstore_conditional_internal_test.go, engdocs spike note | verbs/argv + emulation |
-| 6 | S2-T8 | caching_store_writes.go, caching_store_conditional_test.go | livelock regression (MERGE GATE) |
+| 6 | S2-T8 | caching_store_writes.go (or new caching_store_conditional.go), caching_store_conditional_internal_test.go (package beads: merge gate + evict white-box), caching_store_conditional_test.go (package beads_test: conformance row — beadstest imports beads, so the harness can't be invoked from an internal test) | livelock regression (MERGE GATE) |
 
 (S2-T9 sqlite is deferred out of S2 per plan; S2-T10..T12 are PR-S2b, next session/PR.)
 
@@ -236,7 +245,7 @@ Compile assert `var _ ConditionalWriter = (*CachingStore)(nil)`.
   (2026-07-11).** §8.2 is written as an exit-9/exit-13 discriminator; the real bd
   (v1.1.0-rc.1) has NO exit-code path — it exits 1 for every error and there is no
   `code` field in its envelope yet, so the port is body-code + message-substring
-  (Decision 2). The two inputs that bypass the provisional substrings entirely, and
+  (Decision 2). The three inputs that bypass the provisional substrings entirely, and
   which the `//go:build integration` conformance row (S2-T12) against a #4682-capable
   bd MUST include, are: **(a)** a *capable* bd's cobra usage-echo naming
   `--if-revision` while reporting some *other* unknown flag (must NOT latch — the F1
