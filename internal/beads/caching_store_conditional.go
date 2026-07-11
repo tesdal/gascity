@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/rollout/gate"
 )
 
 // This file holds CachingStore's ConditionalWriter forwarding. The cache rule
@@ -35,7 +37,59 @@ import (
 // ConditionalWriter granularity contract forbids. The fabrication heals via
 // the reconciler's content diff, bounded by the recent-local-mutation
 // conflict window.
-var _ ConditionalWriter = (*CachingStore)(nil)
+var (
+	_ ConditionalWriter                = (*CachingStore)(nil)
+	_ conditionalWritesModeCarrier     = (*CachingStore)(nil)
+	_ conditionalWriteCapabilityProber = (*CachingStore)(nil)
+)
+
+// The cache is a wrapper, not a second store, so it carries no
+// conditional-writes stamp of its own (§6.3): the stamp, its read, and the
+// degrade latch all delegate to the backing store. A backing that cannot
+// carry a stamp (a wrapped or cross-package store) leaves the pair at
+// ModeUnset, so the seam takes the legacy path — enforcement is never raised
+// through a cache whose backing cannot express the mode.
+
+// stampConditionalWritesMode forwards the factory stamp to the backing store
+// and reports whether it landed there; false (carrier-less backing) tells the
+// factory the mode was dropped so the miss is logged, never silently believed.
+func (c *CachingStore) stampConditionalWritesMode(mode gate.Mode, defaulted bool) bool {
+	if carrier, ok := c.backing.(conditionalWritesModeCarrier); ok {
+		return carrier.stampConditionalWritesMode(mode, defaulted)
+	}
+	return false
+}
+
+// conditionalWritesMode reads the backing store's stamp.
+func (c *CachingStore) conditionalWritesMode() (gate.Mode, bool) {
+	if carrier, ok := c.backing.(conditionalWritesModeCarrier); ok {
+		return carrier.conditionalWritesMode()
+	}
+	return gate.ModeUnset, false
+}
+
+// noteConditionalDegradeOnce shares the backing store's degrade latch: cache
+// and backing are one store instance for emission purposes.
+func (c *CachingStore) noteConditionalDegradeOnce() bool {
+	if carrier, ok := c.backing.(conditionalWritesModeCarrier); ok {
+		return carrier.noteConditionalDegradeOnce()
+	}
+	return false
+}
+
+// probeConditionalWriteCapability answers with the backing store's capability:
+// the cache's own ConditionalWriter verbs forward to the backing, so its
+// capability IS the backing's. A backing with CAS verbs but no prober is
+// vacuously capable, mirroring the seam's default.
+func (c *CachingStore) probeConditionalWriteCapability() (bool, string) {
+	if prober, ok := c.backing.(conditionalWriteCapabilityProber); ok {
+		return prober.probeConditionalWriteCapability()
+	}
+	if _, ok := ConditionalWriterFor(c.backing); ok {
+		return true, ""
+	}
+	return false, "backing store does not implement conditional writes"
+}
 
 // UpdateIfMatch forwards the fenced update to the backing store's conditional
 // writer and maintains the cache: refresh on success, evict when the refresh

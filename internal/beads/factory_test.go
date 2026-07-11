@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/rollout/gate"
+
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
@@ -413,4 +415,158 @@ func factoryPreflightDoltMetadata() string {
 		"dolt_database": "gascity",
 		"project_id": "gc-local"
 	}`
+}
+
+// TestOpenStoreAtForCityStampsConditionalWritesMode pins §6.3: the factory is
+// the ONE home of the conditional-writes mode — every store it opens comes
+// back stamped, on every selection path (file, bd fallback, injected native).
+func TestOpenStoreAtForCityStampsConditionalWritesMode(t *testing.T) {
+	t.Setenv(nativeForceFallbackEnv, "")
+	scope := "/city"
+
+	assertStamped := func(t *testing.T, store Store, wantMode gate.Mode, wantDefaulted bool) {
+		t.Helper()
+		carrier, ok := store.(conditionalWritesModeCarrier)
+		if !ok {
+			t.Fatalf("store %T carries no conditional-writes stamp", store)
+		}
+		mode, defaulted := carrier.conditionalWritesMode()
+		if mode != wantMode || defaulted != wantDefaulted {
+			t.Fatalf("stamp = (%q, %v), want (%q, %v)", mode, defaulted, wantMode, wantDefaulted)
+		}
+	}
+
+	t.Run("file path stamps the resolved mode", func(t *testing.T) {
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "file",
+			ConditionalWrites: gate.Require,
+			OpenFileStore:     func() (Store, error) { return NewMemStore(), nil },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		assertStamped(t, result.Store, gate.Require, false)
+	})
+
+	t.Run("bd fallback path stamps the resolved mode", func(t *testing.T) {
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "unknown-provider",
+			ConditionalWrites: gate.Auto,
+			OpenBdStore: func() (Store, error) {
+				return NewBdStore(scope, func(string, string, ...string) ([]byte, error) {
+					t.Fatal("no bd subprocess may run during open")
+					return nil, nil
+				}), nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		assertStamped(t, result.Store, gate.Auto, false)
+	})
+
+	t.Run("native path stamps the resolved mode", func(t *testing.T) {
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "bd",
+			PreflightChecker:  factoryPreflightChecker(scope, factoryPreflightDoltMetadata(), contract.PreflightBDContext{Backend: "dolt", DoltMode: "server"}),
+			ConditionalWrites: gate.Auto,
+			OpenBdStore: func() (Store, error) {
+				t.Fatal("OpenBdStore called for native-eligible scope")
+				return nil, nil
+			},
+			OpenNativeStore: func() (Store, error) { return NewMemStore(), nil },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		assertStamped(t, result.Store, gate.Auto, false)
+	})
+
+	t.Run("exec-direct path stamps a carrier store", func(t *testing.T) {
+		// exec.Store itself is carrier-less, but the stamp wrap must still sit
+		// on the exec-direct arm (red-team F7): inject a carrier double.
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "exec:custom-tool",
+			ConditionalWrites: gate.Auto,
+			OpenExecStore:     func() (Store, error) { return NewMemStore(), nil },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		assertStamped(t, result.Store, gate.Auto, false)
+	})
+
+	t.Run("exec-bd-contract fallback path stamps a carrier store", func(t *testing.T) {
+		provider := "exec:/tmp/gc-beads-bd.sh"
+		checker := factoryPreflightChecker(scope, factoryPreflightDoltMetadata(), contract.PreflightBDContext{Backend: "dolt", DoltMode: "server"})
+		checker.Provider = provider
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          provider,
+			ConditionalWrites: gate.Auto,
+			PreflightChecker:  checker,
+			OpenExecStore:     func() (Store, error) { return NewMemStore(), nil },
+			OpenNativeStore:   func() (Store, error) { return nil, errors.New("native unavailable") },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		if result.Diagnostic.Store != storeNameExecStore {
+			t.Fatalf("diagnostic store = %q, want the exec fallback arm", result.Diagnostic.Store)
+		}
+		assertStamped(t, result.Store, gate.Auto, false)
+	})
+
+	t.Run("unset maps to off and marks the default", func(t *testing.T) {
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:     scope,
+			Provider:      "file",
+			OpenFileStore: func() (Store, error) { return NewMemStore(), nil },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		assertStamped(t, result.Store, gate.Off, true)
+		w, diag, resolveErr := ResolveConditionalWriter(result.Store)
+		if w != nil || diag != nil || resolveErr != nil {
+			t.Fatal("defaulted-off store must resolve to the legacy path")
+		}
+	})
+
+	t.Run("carrier-less store opens without error", func(t *testing.T) {
+		bare := &struct{ Store }{Store: NewMemStore()}
+		result, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "file",
+			ConditionalWrites: gate.Require,
+			OpenFileStore:     func() (Store, error) { return bare, nil },
+		})
+		if err != nil {
+			t.Fatalf("OpenStoreAtForCity: %v", err)
+		}
+		if result.Store != Store(bare) {
+			t.Fatalf("store = %T, want the carrier-less store returned as-is", result.Store)
+		}
+		// Unstampable → the seam sees ModeUnset → legacy; enforcement is
+		// never raised on a path that cannot carry the mode.
+		if w, diag, resolveErr := ResolveConditionalWriter(result.Store); w != nil || diag != nil || resolveErr != nil {
+			t.Fatal("carrier-less store must resolve to the legacy path")
+		}
+	})
+
+	t.Run("open error does not stamp", func(t *testing.T) {
+		_, err := OpenStoreAtForCity(context.Background(), StoreOpenOptions{
+			ScopeRoot:         scope,
+			Provider:          "file",
+			ConditionalWrites: gate.Require,
+			OpenFileStore:     func() (Store, error) { return nil, errors.New("boom") },
+		})
+		if err == nil {
+			t.Fatal("want open error to propagate")
+		}
+	})
 }

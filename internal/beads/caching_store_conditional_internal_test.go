@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/rollout/gate"
 )
 
 // casBackingStore wraps a Store for the conditional-write cache tests. It
@@ -952,4 +955,113 @@ func TestCachingStoreCompareAndSetForwardsWithoutCachedPreCheck(t *testing.T) {
 	if backing.casCalls != pre+1 {
 		t.Fatalf("backing CAS calls %d -> %d, want exactly one forwarded call (no cached pre-check)", pre, backing.casCalls)
 	}
+}
+
+// TestCachingStoreConditionalWritesStampDelegatesToBacking pins §6.3's
+// delegation rule: the cache is a wrapper, not a second store, so it carries
+// no stamp of its own — stamp writes, stamp reads, and the degrade latch all
+// forward to the backing store, and the seam resolves the CachingStore using
+// the backing's mode while returning the CACHING store as the writer (so the
+// forward-and-evict cache rules stay in the loop).
+func TestCachingStoreConditionalWritesStampDelegatesToBacking(t *testing.T) {
+	mem := NewMemStore()
+	cache := newConditionalCacheForTest(t, mem)
+
+	cache.stampConditionalWritesMode(gate.Require, false)
+	if mode, defaulted := mem.conditionalWritesMode(); mode != gate.Require || defaulted {
+		t.Fatalf("backing stamp after caching stamp = (%q, %v), want (require, false)", mode, defaulted)
+	}
+	if mode, _ := cache.conditionalWritesMode(); mode != gate.Require {
+		t.Fatalf("caching stamp read = %q, want the backing's require", mode)
+	}
+
+	w, diag, err := ResolveConditionalWriter(cache)
+	if err != nil || diag != nil {
+		t.Fatalf("require∧capable over cache = diag %v err %v, want nil/nil", diag, err)
+	}
+	if got, ok := w.(*CachingStore); !ok || got != cache {
+		t.Fatalf("writer = %T, want the CachingStore itself (cache rules must stay in the write path)", w)
+	}
+
+	// The degrade latch is ONE latch shared with the backing store.
+	if !mem.noteConditionalDegradeOnce() {
+		t.Fatal("backing first degrade note = false, want true")
+	}
+	if cache.noteConditionalDegradeOnce() {
+		t.Fatal("caching degrade note = true after backing noted, want the shared latch to report false")
+	}
+}
+
+// TestCachingStoreConditionalCapabilityDelegatesToBacking drives the seam's
+// prober through the cache: an incapable backing degrades the cache resolve
+// (auto) and refuses it (require); a carrier-less wrapped backing resolves as
+// unset→legacy.
+func TestCachingStoreConditionalCapabilityDelegatesToBacking(t *testing.T) {
+	t.Run("backing instance toggle degrades the cache resolve", func(t *testing.T) {
+		mem := NewMemStore()
+		mem.DisableConditionalWrites = true
+		cache := newConditionalCacheForTest(t, mem)
+		cache.stampConditionalWritesMode(gate.Auto, false)
+
+		w, diag, err := ResolveConditionalWriter(cache)
+		if w != nil || err != nil || diag == nil {
+			t.Fatalf("auto over cache w/ disabled backing = (%v, %v, %v), want (nil, diag, nil)", w, diag, err)
+		}
+		if diag.Store != "CachingStore" {
+			t.Fatalf("diag.Store = %q, want CachingStore (the resolved store, not the backing)", diag.Store)
+		}
+	})
+	t.Run("require over an incapable backing refuses closed", func(t *testing.T) {
+		mem := NewMemStore()
+		mem.DisableConditionalWrites = true
+		cache := newConditionalCacheForTest(t, mem)
+		cache.stampConditionalWritesMode(gate.Require, false)
+
+		w, diag, err := ResolveConditionalWriter(cache)
+		if w != nil || diag == nil || !IsConditionalWritesRequired(err) {
+			t.Fatalf("require over cache = (%v, %v, %v), want (nil, diag, typed refusal)", w, diag, err)
+		}
+	})
+	t.Run("carrier-less wrapped backing resolves unset legacy", func(t *testing.T) {
+		backing := &casBackingStore{Store: NewMemStore()}
+		cache := newConditionalCacheForTest(t, backing)
+		// Stamping forwards to a backing that cannot carry it: the miss is
+		// REPORTED (red-team F2), never silently believed.
+		if cache.stampConditionalWritesMode(gate.Require, false) {
+			t.Fatal("stamp into a carrier-less backing reported landed=true")
+		}
+		w, diag, err := ResolveConditionalWriter(cache)
+		if w != nil || diag != nil || err != nil {
+			t.Fatalf("cache over carrier-less backing = (%v, %v, %v), want unset legacy (nil, nil, nil)", w, diag, err)
+		}
+	})
+	t.Run("stamped backing with CAS verbs but no prober is vacuously capable", func(t *testing.T) {
+		mem := NewMemStore()
+		backing := &casOnlyStore{Store: mem, ConditionalWriter: mem}
+		cache := newConditionalCacheForTest(t, backing)
+		if !cache.stampConditionalWritesMode(gate.Auto, false) {
+			t.Fatal("stamp into a carrier backing reported landed=false")
+		}
+		w, diag, err := ResolveConditionalWriter(cache)
+		if err != nil || diag != nil {
+			t.Fatalf("auto over cache w/ CAS-verbs-no-prober backing = diag %v err %v, want nil/nil (vacuously capable)", diag, err)
+		}
+		if got, ok := w.(*CachingStore); !ok || got != cache {
+			t.Fatalf("writer = %T, want the CachingStore itself", w)
+		}
+	})
+	t.Run("stamped backing without CAS verbs degrades with the backing reason", func(t *testing.T) {
+		// The future cache-over-NativeDoltStore shape: the backing carries a
+		// stamp but implements neither the prober nor ConditionalWriter.
+		backing := &stampedNoCASStore{Store: NewMemStore()}
+		cache := newConditionalCacheForTest(t, backing)
+		cache.stampConditionalWritesMode(gate.Auto, false)
+		w, diag, err := ResolveConditionalWriter(cache)
+		if w != nil || err != nil || diag == nil {
+			t.Fatalf("auto over cache w/ CAS-less backing = (%v, %v, %v), want (nil, diag, nil)", w, diag, err)
+		}
+		if !strings.Contains(diag.PreflightReason, "backing store does not implement conditional writes") {
+			t.Fatalf("PreflightReason = %q, want the backing-incapable reason", diag.PreflightReason)
+		}
+	})
 }

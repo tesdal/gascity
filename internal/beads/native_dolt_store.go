@@ -161,6 +161,12 @@ type NativeDoltStore struct {
 	storage  beadslib.Storage
 	actor    string
 	idPrefix string
+
+	// condWritesStamp carries the factory-stamped conditional-writes mode.
+	// NativeDoltStore implements no ConditionalWriter yet (S2-T9), so the
+	// stamp's effect today is require→typed refusal / auto→loud degrade at
+	// the seam, never a silent legacy write under require.
+	condWritesStamp
 }
 
 var (
@@ -170,6 +176,7 @@ var (
 	_ GraphApplyStore               = (*NativeDoltStore)(nil)
 	_ StorageGraphApplyStore        = (*NativeDoltStore)(nil)
 	_ EphemeralGraphApplyStore      = (*NativeDoltStore)(nil)
+	_ conditionalWritesModeCarrier  = (*NativeDoltStore)(nil)
 )
 
 func newNativeDoltStoreWithStorage(storage beadslib.Storage, actor string) *NativeDoltStore {
