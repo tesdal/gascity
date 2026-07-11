@@ -13,6 +13,8 @@ import (
 // exported for use as a test double in cross-package tests. It is safe for
 // concurrent use.
 type MemStore struct {
+	condWritesStamp
+
 	mu    sync.Mutex
 	beads []Bead
 	deps  []Dep

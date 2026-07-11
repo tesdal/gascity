@@ -5,7 +5,31 @@ import (
 	"time"
 )
 
-var _ ConditionalWriter = (*MemStore)(nil)
+var (
+	_ ConditionalWriter                = (*MemStore)(nil)
+	_ conditionalWritesModeCarrier     = (*MemStore)(nil)
+	_ conditionalWriteCapabilityProber = (*MemStore)(nil)
+
+	// FileStore inherits the stamp and the prober through its embedded
+	// *MemStore: DisableConditionalWrites is ONE field stored on the embedded
+	// MemStore (FileStore's CAS shadows read the same storage through
+	// promotion), so a promoted prober answers identically and FileStore
+	// needs no shadow of its own.
+	_ conditionalWritesModeCarrier     = (*FileStore)(nil)
+	_ conditionalWriteCapabilityProber = (*FileStore)(nil)
+)
+
+// probeConditionalWriteCapability reports the instance toggle: a MemStore is
+// natively capable unless DisableConditionalWrites is set (the deterministic
+// auto-degrade / require-fail-closed matrix cell, §7.3).
+func (m *MemStore) probeConditionalWriteCapability() (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.DisableConditionalWrites {
+		return false, "conditional writes disabled on this store instance"
+	}
+	return true, ""
+}
 
 // UpdateIfMatch applies opts only when the bead's current revision equals
 // expectedRevision, otherwise it returns *PreconditionFailedError. When the
