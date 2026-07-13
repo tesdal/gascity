@@ -368,7 +368,7 @@ func (cs *controllerState) openRigStore(provider, rigName, rigPath, prefix strin
 			// scan / Get recovers a managed-Dolt hard-kill/rebind instead of
 			// dialing the dead port for the whole retry budget.
 			reopen := func(ctx context.Context) (beads.NativeStorage, error) {
-				freshEnv, rerr := nativeDoltOpenEnvForScope(cs.cityPath, cfg, scopeRoot)
+				freshEnv, rerr := nativeDoltOpenEnvForScopeContext(ctx, cs.cityPath, cfg, scopeRoot)
 				if rerr != nil {
 					return nil, fmt.Errorf("re-resolve native rig store env %s: %w", scopeRoot, rerr)
 				}
