@@ -305,7 +305,6 @@ func (s *Server) materializeNamedSessionWithContext(ctx context.Context, store b
 		ResumeCommand: resolved.ResumeCommand,
 		SessionIDFlag: resolved.SessionIDFlag,
 	}
-	mgr := s.sessionManager(store)
 	extraMeta := map[string]string{
 		apiNamedSessionMetadataKey: "true",
 		apiNamedSessionIdentityKey: spec.Identity,
@@ -330,6 +329,35 @@ func (s *Server) materializeNamedSessionWithContext(ctx context.Context, store b
 	}
 	sessionEnv := cityAnchoredSessionEnv(s.state.CityPath(), resolved.Env)
 	hints := sessionCreateHints(resolved, sessionEnv, mcpServers)
+	// Route the named-session create through the worker.Handle boundary
+	// (worker-boundary migration) rather than calling session.Manager directly.
+	// SessionSpecForResolvedRuntime maps this config 1:1 onto the same
+	// CreateAliasedNamedWithTransportAndMetadata call createStartedLocked makes
+	// (alias, name, template, title, command, workdir, provider, transport, env,
+	// resume, hints, metadata), so the created session is identical; the handle
+	// additionally emits the uniform worker create-operation event.
+	resolvedCfg := worker.ResolvedSessionConfig{
+		Alias:        spec.Identity,
+		ExplicitName: spec.SessionName,
+		Template:     qualifiedTemplate,
+		Title:        spec.Identity,
+		Transport:    transport,
+		Metadata:     extraMeta,
+		Runtime: worker.ResolvedRuntime{
+			// Backfill an empty command with the provider name, matching the
+			// sibling boundary consumer (resolvedSessionConfigForProvider) and
+			// cmd/gc/worker_handle.go. A command-less custom provider otherwise
+			// hard-fails NormalizeResolvedRuntime ("command is required") where
+			// the old direct path minted a (doomed) session — the backfill keeps
+			// the create succeeding and converges this path with the adhoc one.
+			Command:    firstNonEmptyString(launchCommand.Command, resolved.Name),
+			WorkDir:    workDir,
+			Provider:   resolved.Name,
+			SessionEnv: sessionEnv,
+			Resume:     resume,
+			Hints:      hints,
+		},
+	}
 	var info session.Info
 	err = session.WithCitySessionIdentifierLocks(s.state.CityPath(), []string{spec.Identity, spec.SessionName}, func() error {
 		if err := session.EnsureAliasAvailableWithConfigForOwner(store, s.state.Config(), spec.Identity, "", spec.Identity); err != nil {
@@ -338,21 +366,12 @@ func (s *Server) materializeNamedSessionWithContext(ctx context.Context, store b
 		if err := session.EnsureSessionNameAvailableWithConfigForOwner(store, s.state.Config(), spec.SessionName, "", spec.Identity); err != nil {
 			return err
 		}
+		handle, herr := s.newResolvedWorkerSessionHandle(store, resolvedCfg)
+		if herr != nil {
+			return herr
+		}
 		var createErr error
-		info, createErr = mgr.CreateSession(ctx, session.CreateOptions{
-			Alias:        spec.Identity,
-			ExplicitName: spec.SessionName,
-			Template:     qualifiedTemplate,
-			Title:        spec.Identity,
-			Command:      launchCommand.Command,
-			WorkDir:      workDir,
-			Provider:     resolved.Name,
-			Transport:    transport,
-			Env:          sessionEnv,
-			Resume:       resume,
-			Hints:        hints,
-			ExtraMeta:    extraMeta,
-		})
+		info, createErr = handle.Create(ctx, worker.CreateModeStarted)
 		return createErr
 	})
 	if err == nil {
