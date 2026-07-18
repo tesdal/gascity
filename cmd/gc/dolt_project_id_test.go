@@ -19,7 +19,6 @@ import (
 )
 
 func TestEnsureManagedDoltProjectIDGeneratesLocalIdentityWhenMetadataAndDatabaseMissing(t *testing.T) {
-	skipSlowCmdGCTest(t, "requires a managed dolt server; run make test-cmd-gc-process for full coverage")
 	cityDir := t.TempDir()
 	metadataPath := writeProjectIDMetadataFile(t, cityDir, "")
 	port, cleanup := startProjectIDTestServer(t)
@@ -546,6 +545,7 @@ func assertDatabaseProjectID(t *testing.T, port string, want string) {
 
 func startPasswordedDoltServer(t *testing.T, repoDir string, setupQueries ...string) (string, int, int, func()) {
 	t.Helper()
+	skipSlowCmdGCTest(t, "requires a real Dolt server; run make test-cmd-gc-process for full coverage")
 	configureTestDoltIdentityEnv(t)
 
 	doltPath := os.Getenv("GC_DOLT_REAL_BINARY")

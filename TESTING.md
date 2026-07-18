@@ -47,11 +47,11 @@ managed-provider hard-kill/port-rebind boundary. Likewise,
 singular CLI/config/file-store/controller-socket composition proof for wake.
 `TestDoMailInbox_RendersMessagesFromReader` owns inbox rendering through the
 consumer's one-method reader port, while
-`TestCmdMailInbox_ManagedExecLifecycleProviderReadsInbox` remains the singular
-CLI/mail/`exec:gc-beads-bd` managed-city composition proof. Managed-provider
-recovery stays with the exact provider-store owner instead of being repeated by
-each command consumer. Body review is not a reason to remove a retained
-boundary test.
+`TestCmdMailInbox_NormalizesCanonicalManagedProviderEnvAndReadsInbox` remains
+the singular CLI/mail/canonical-`GC_BEADS`/real-Dolt store-factory composition
+proof. Full managed-city lifecycle and recovery stay with their focused
+provider-store owners instead of being repeated by each command consumer. Body
+review is not a reason to remove a retained boundary test.
 
 `TestDockerSessionProtocol` owns fast Docker CLI mapping, injected failures,
 and cleanup transitions through a strict `PATH`-injected executable. The
@@ -164,7 +164,7 @@ all-source audit while staying outside untagged and Small debt.
 
 | Reviewed hermetic body | Effective runnable size | Medium reason | Retained real composition owner |
 | --- | --- | --- | --- |
-| `cmd/gc` package `main` — TestDoMailInbox_RendersMessagesFromReader | medium | package TestMain mutates process state | `cmd/gc` package `main` — TestCmdMailInbox_ManagedExecLifecycleProviderReadsInbox |
+| `cmd/gc` package `main` — TestDoMailInbox_RendersMessagesFromReader | medium | package TestMain mutates process state | `cmd/gc` package `main` — TestCmdMailInbox_NormalizesCanonicalManagedProviderEnvAndReadsInbox |
 | `cmd/gc` package `main` — TestDoSessionWait_RegistersReadyWaitForRigDependency | medium | package TestMain mutates process state | `cmd/gc` package `main` — TestCmdSessionWait_AllowsRigDependencyBeads |
 | `cmd/gc` package `main` — TestDoSessionWake_PokesManagedControllerAfterStateChange | medium | package TestMain mutates process state | `cmd/gc` package `main` — TestCmdSessionWake_PokesManagedControllerAndRequestsSuspendedStart |
 | `cmd/gc` package `main` — TestPrepareWaitWakeState_ResolvesRigDependencyBeads | medium | package TestMain mutates process state | `cmd/gc` package `main` — TestCmdSessionWait_AllowsRigDependencyBeads |
