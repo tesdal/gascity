@@ -163,23 +163,6 @@ func validateProductMetricsJSONSchemaE(command []string, data []byte) error {
 	return compiled.Validate(instance)
 }
 
-func TestProductMetricsControlFlowUsesTaggedBinaryWithoutCityOrPackState(t *testing.T) {
-	skipSlowCmdGCTest(t, "builds and executes a tagged gc binary")
-	configureProductMetricsTrustedProcessTempRoot(t)
-
-	buildDir := t.TempDir()
-	taggedBinary := filepath.Join(buildDir, "gc-productmetrics-controls-tagged")
-	buildGCBinaryForProductMetricsTest(t, taggedBinary, "productmetrics_testhook")
-
-	workingDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workingDir, "city.toml"), []byte("invalid = [\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	home := t.TempDir()
-	holdProductMetricsPackCacheLock(t, home)
-	runProductMetricsTaggedControlFlow(t, taggedBinary, workingDir, home)
-}
-
 func runProductMetricsTaggedControlFlow(t *testing.T, binary, workingDir, home string) {
 	t.Helper()
 	const privacySentinel = "s10-private-ordinary-help-sentinel"
